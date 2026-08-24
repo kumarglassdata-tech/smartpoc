@@ -1,70 +1,169 @@
-# Goal Description
+# Meta Ray-Ban Smart Glasses Integration & Complete 5-Engine Pipeline Flow
 
-Implement client-side Speaker Verification ("Enroll Voice") as a fallback activation method when the "Hey Myna" wake-word toggle is disabled. The system will guide the user to read a short story 4 times to extract voice embeddings via the ECAPA-TDNN ONNX model, save them locally per-user in JSON format, and allow them to test verification against other speakers.
-
-## User Review Required
-
-> [!WARNING]  
-> **DSP Implementation Complexity in Dart**
-> The reference Python script uses `librosa` and `torchaudio`/`kaldi` standard DSP functions (Mel filterbanks, pre-emphasis, Short-Time Fourier Transform). Translating these exact mathematical operations to pure Dart so the ONNX model receives the exact distribution it expects is highly non-trivial but achievable. I will implement a Dart-based `KaldiFbank` class that mirrors the Python `_kaldi_fbank` logic.
-
-## Open Questions
-
-> [!IMPORTANT]  
-> 1. **ONNX Model Availability**: The reference script mentions `voxceleb_ECAPA512.onnx`. Do you already have this model downloaded and placed in the `assets/models/` directory? (If not, I'll assume we need to add it to `pubspec.yaml` assets).
-> 2. **Authentication / User ID**: The requirements mention "individual user login candidate individual json file". I will use the email from `AuthProvider` as the unique ID for saving the JSON profile. Is this acceptable?
-> 3. **Audio Recording Plugin**: The project currently uses `record` and `flutter_pcm_sound`. I will use the `record` package to capture the 16kHz PCM audio needed for enrollment.
-
-## Proposed Changes
+This document details the architecture and verified execution flow of the **Meta Ray-Ban Smart Glasses (MWDAT SDK 0.9.0)** operating seamlessly across the **SmartPoc 5-Engine AI Pipeline**.
 
 ---
 
-### UI & Navigation
+## 🗺️ Complete End-to-End Pipeline Architecture
 
-#### [MODIFY] `lib/settings_screen.dart`
-- Update the `onChanged` callback for the "Wake word" switch.
-- If the user turns it off (`value == false`), navigate to the new `EnrollVoiceScreen` before applying the change.
+```mermaid
+flowchart TD
+    subgraph Layer1 ["1. Input Capture Layer"]
+        Glasses["Meta Ray-Ban Glasses"] -->|Wi-Fi Direct| MWDAT["Native Android Host: Planar I420 to NV21 to JPEG"]
+        MWDAT -->|Frames EventChannel| Service["MetaGlassesService frameStream"]
+        Service --> Adapter["MetaGlassesSourceAdapter"]
+        Location["LocationService GPS"]
+        Adapter --> SourceManager["SourceManager videoStream"]
+        Location --> SourceManager
+        SourceManager --> Provider["SessionProvider onSourceFrame"]
+    end
 
-#### [NEW] `lib/auth/enroll_voice_screen.dart`
-- Create a new Stateful widget displaying a pleasant 5-7 sentence paragraph.
-- Implement a step-by-step UI:
-  - **Enrollment Phase**: Ask the user to record themselves reading the paragraph 4 times. Update progress (0/4 -> 4/4).
-  - **Testing Phase**: Once enrolled, display a "Test Voice" section where anyone can speak into the mic, and the app will display whether it is the enrolled user or "Other/Unknown" based on cosine similarity.
+    subgraph Layer2 ["2. Context Engine WebSocket Stream"]
+        Provider -->|sendFrame: JPEG and GPS| CE["ContextEngineClient wss://myna.glassdata.ai/api/v1/ce/stream"]
+        CE -->|Returns Myna_Context JSON| Dispatcher["runPipeline"]
+    end
+
+    subgraph Layer3 ["3. Pipeline Coordinator"]
+        Dispatcher -->|Parallel Branch A: Change Gated| SMA["Safety Memory Agent POST /msa/inp: Allergy and Hazard checks"]
+        Dispatcher -->|Main Branch B: Context and Voice NLU| BE["Behaviour Engine POST /be/process: Relevance, Salience and Lifestyle"]
+        BE -->|Sequential Step C: Change and Relevance Gated| AH["Ecom Ad Handler HTTP 6 Calls: /ah/inp to /buy, /recommend, /lifebalance"]
+        BE -->|Fire and Forget Step D| IETelemetry["IE Telemetry Sink"]
+    end
+
+    subgraph Layer4 ["4. Interaction Engine Voice WebSocket"]
+        IE["InteractionEngineClient wss://myna.glassdata.ai/api/v1/ie/ws"]
+        IETelemetry -.->|Telemetry| IE
+        IE -.->|Cached voice_nlu| BE
+        IE --- Mic["Voice Path: Hey Myna ONNX Wake Word + Silero VAD + PCM16 Audio + TTS Barge-in"]
+    end
+
+    subgraph Layer5 ["5. Presentation Layer"]
+        Provider --> UI["LiveSessionScreen"]
+        UI --- Viewfinder["Live Viewfinder: gaplessPlayback true"]
+        UI --- VLM["Translucent Omni-Context VLM Caption Bar"]
+        UI --- Chips["Detected Object Chips: Green highlight on match"]
+        UI --- Recs["Matched Products and Recommendations Carousel"]
+        UI --- VoiceStatus["Live Voice Assistant Status Strip"]
+    end
+
+    Layer3 --> Layer5
+```
 
 ---
 
-### Speaker Verification Logic (Client-Side)
+## 📐 Text Flow Diagram
 
-#### [NEW] `lib/interaction_engine/speaker_verification_client.dart`
-- **Core logic translated from Python**:
-  - `loadModel()`: Load `voxceleb_ECAPA512.onnx` via the `flutter_onnxruntime` package.
-  - `extractEmbedding(Int16List pcmData)`: 
-    - Trim silence (based on RMS energy).
-    - Convert to Kaldi Log-Mel Filterbanks (Pre-emphasis, Hamming window, FFT, Mel-scale triangular filters, Cepstral Mean Normalization).
-    - Run the resulting `(1, T, 80)` tensor through the ONNX session to get a `(1, 192)` float embedding.
-    - L2 normalize the embedding.
-  - `cosineSimilarity(a, b)`: Helper to compare two embeddings.
-
-#### [NEW] `lib/interaction_engine/speaker_profile.dart`
-- **Profile Management**:
-  - Load and save profiles to `<AppDocumentsDir>/speaker_profiles/<user_email>.json`.
-  - Maintain a list of up to 5 embeddings.
-  - Provide a `classify()` method that averages the stored embeddings and checks the cosine similarity against the `USER_SIM_THRESHOLD` (e.g. `0.60`).
+```text
++-----------------------------------------------------------------------------------+
+| 1. INPUT CAPTURE LAYER                                                            |
+|    Meta Ray-Ban Glasses (Wi-Fi Direct)                                            |
+|       │                                                                           |
+|       ▼                                                                           |
+|    Native Android Host (MainActivity.kt: Planar I420 -> NV21 -> JPEG)             |
+|       │                                                                           |
+|       ▼                                                                           |
+|    MetaGlassesService (frameStream) -> MetaGlassesSourceAdapter -> SourceManager  |
++-----------------------------------------------------------------------------------+
+                                         │
+                                         ▼
++-----------------------------------------------------------------------------------+
+| 2. CONTEXT ENGINE (WebSocket Stream: wss://myna.glassdata.ai/api/v1/ce/stream)    |
+|    SessionProvider sends JPEG + GPS Coordinates                                   |
+|    CE returns Myna_Context JSON (Scene Objects, Gaze Grounding, Hand Events, VLM) |
++-----------------------------------------------------------------------------------+
+                                         │
+                                         ▼
++-----------------------------------------------------------------------------------+
+| 3. PIPELINE COORDINATOR (runPipeline)                                             |
+|    ├── [Parallel Branch A] Safety Memory Agent (POST /msa/inp)                    |
+|    │   └── Allergy & hazard checks (Change-gated on scene objects)                |
+|    │                                                                              |
+|    ├── [Main Branch B] Behaviour Engine (POST /be/process)                        |
+|    │   └── Merges CE context + cached voice_nlu intent                            |
+|    │   └── Calculates relevance score (0.0-1.0), salient objects & lifestyle      |
+|    │                                                                              |
+|    ├── [Sequential Step C] Ecom Ad Handler (HTTP 6 Calls: /ah/inp -> /buy etc.)   |
+|    │   └── Primes /ah/inp -> Fetches /buy, /recommend, /analyze, /lifebalance     |
+|    │                                                                              |
+|    └── [Fire-and-Forget Step D] Interaction Engine Telemetry Sink                 |
++-----------------------------------------------------------------------------------+
+                                         │
+                                         ▼
++-----------------------------------------------------------------------------------+
+| 4. INTERACTION ENGINE (Independent Voice WebSocket: /ie/ws)                       |
+|    Hey Myna Wake Word + Silero VAD + PCM16 streaming + Voice NLU Intent + TTS     |
++-----------------------------------------------------------------------------------+
+                                         │
+                                         ▼
++-----------------------------------------------------------------------------------+
+| 5. PRESENTATION LAYER (LiveSessionScreen)                                         |
+|    Live Viewfinder + VLM Caption Bar + Detected Chips + Product Recs Carousel     |
++-----------------------------------------------------------------------------------+
+```
 
 ---
 
-### Permissions & Assets
+## ⚙️ Detailed Step-by-Step Execution Flow
 
-#### [MODIFY] `pubspec.yaml`
-- Ensure `assets/models/voxceleb_ECAPA512.onnx` is registered.
-- (Ensure `path_provider` and `record` are ready for use, which they already appear to be).
+### 1. Ingestion & Frame Throttling
+- When the user selects **Meta Ray-Ban Glasses** on `ChooseSourceScreen` and taps **Begin Live Session**:
+  - `SourceManager` switches to `SourceType.metaGlasses`, activating `MetaGlassesSourceAdapter`.
+  - The native layer starts video streaming via Wi-Fi Direct and delivers synchronized JPEG byte arrays to `MetaGlassesService.instance.frameStream`.
+  - `SessionProvider._onSourceFrame(frame)` captures the frame:
+    - **Concurrency Gate (`_isProcessingFrame`)**: Prevents pipeline buffer lag by dropping intermediate frames while keeping the UI viewfinder smooth at ~30 FPS.
+    - Sends the JPEG payload + GPS coordinates to `ContextEngineClient.sendFrame()`.
 
-## Verification Plan
+---
 
-### Manual Verification
-1. Open the Settings screen and toggle "Wake word" to OFF.
-2. Verify that the app navigates to the `EnrollVoiceScreen`.
-3. Complete the 4-step reading enrollment. Verify that the `<email>.json` file is written to the device's local storage with the embeddings.
-4. Use the "Test" button on the screen:
-   - Speak as the enrolled user and verify it says "User".
-   - Have someone else speak (or play a recording of someone else) and verify it says "Other/Unknown".
+### 2. Context Engine (`CE`) — *WebSocket Stream*
+- **URL**: `wss://myna.glassdata.ai/api/v1/ce/stream`
+- **Output (`Myna_Context`)**:
+  - `omni_context_vlm.detailed_description`: Natural language description of what the user is seeing through the glasses.
+  - `scene_objects`: Array of objects detected in the glasses' field of view with bounding boxes and confidence scores.
+  - `gaze_grounding`: User focus point (`grounded_target`, coordinates, alignment score).
+  - `hand_object_events` & `interaction_primitives`: Hand interactions (e.g., `pickup` events, shelf reach).
+  - `location_information`: City, region, country.
+
+---
+
+### 3. Pipeline Coordinator (`pipeline_coordinator.dart`)
+When CE returns a frame JSON, `runPipeline()` coordinates all downstream engines:
+
+1. **Safety Memory Agent (`SMA / MSA`)** — *Parallel HTTP POST (`/msa/inp`)*:
+   - **Change-Gated**: Only executes when detected `scene_objects` change.
+   - Evaluates potential allergies, hazards, or safety warnings (`hazardDetected`, `hazardLevel`, `triggerObject`, `utterance`).
+
+2. **Behaviour Engine (`BE`)** — *Main HTTP POST (`/be/process`)*:
+   - Fuses the complete CE context with any active `voice_nlu` intent cached from the Interaction Engine.
+   - Computes:
+     - `relevanceScore`: Purchase/interest score from `0.0` to `1.0`.
+     - `topSalientObjects`: Ranked objects in focus with salience scores.
+     - `lifestyleCluster` & `behavioralState`: User's behavioral classification.
+
+3. **Ecom Ad Handler (`AH / Ecom Hub`)** — *Sequential HTTP 6 Calls (`/ah/*`)*:
+   - **Change & Relevance-Gated**: Re-fires when scene objects or gaze target change, OR when `relevanceScore` rises by $\ge 0.15$ (user dwelling on an item).
+   - **Order of Operations**:
+     1. POST `/ah/inp`: Primes server context with `top_salient_objects` & `relevance_score`.
+     2. Concurrent Fetch: `/ah/buy`, GET `/ah/recommend`, POST `/ah/recommend`, `/ah/analyze`, `/ah/lifebalance`.
+   - Returns matched products, direct purchase links, and lifestyle balance metrics.
+
+4. **Interaction Engine Telemetry**:
+   - Asynchronously forwards behavioral telemetry (state, gaze target, salient objects) to the voice server.
+
+---
+
+### 4. Interaction Engine (`IE`) — *Independent Voice WebSocket*
+- **URL**: `wss://myna.glassdata.ai/api/v1/ie/ws`
+- **Continuous Operation**:
+  - **Wake Word Detection**: On-device 3-stage ONNX model (`melspectrogram` $\to$ `embedding` $\to$ `classifier`) listening for *"Hey Myna"*.
+  - **VAD & Streaming**: Silero VAD streams raw PCM16 audio over WebSocket once speech is detected.
+  - **Voice NLU Bridge**: Server resolves user speech into structured `voice_nlu` intent, cached client-side for 15s and injected into the next BE `/process` call.
+  - **Audio Output**: Plays TTS assistant replies with real-time barge-in interruption.
+
+---
+
+### 5. UI Presentation (`LiveSessionScreen`)
+- **Live Glasses Viewfinder**: Smooth video rendering with `gaplessPlayback: true`.
+- **VLM Caption Bar**: Shows real-time scene understanding directly over the feed.
+- **Interactive Object Chips**: Displays detected scene objects; highlights in green when commercial products are matched.
+- **Recommendations Drawer**: Live product cards with prices, ratings, and purchase actions.

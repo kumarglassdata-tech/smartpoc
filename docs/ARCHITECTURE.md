@@ -276,11 +276,11 @@ keystore SHA-1, done outside this codebase) - email/password works immediately w
   reads what it needs via `context.watch<SessionProvider>()` instead of owning its own client
   fields or re-running the pipeline itself.
 - **`lib/sources/`** - `SourceAdapter` interface + `SourceManager` (active adapter + auto-fallback
-  to phone on disconnect) + `phone_source_adapter.dart` (real camera via `camera_service.dart` +
+  to phone on disconnect) + `meta_glasses_source_adapter.dart` (Ray-Ban Meta smart glasses via
+  `MetaGlassesService` + real GPS) + `phone_source_adapter.dart` (real camera via `camera_service.dart` +
   real GPS) + `video_upload_source_adapter.dart` (decodes an uploaded image/video; video-frame
-  extraction only works on web - see below). **`mock_source_adapter.dart` was removed** per
-  explicit request (no synthetic/fake data source); `SourceManager`'s default active type changed
-  from `mock` to `phone` accordingly. A `laptop_source_adapter.dart` from the reference was never
+  extraction only works on web - see below). `SourceManager`'s default active type is `metaGlasses`
+  with seamless fallback to `phone`. A `laptop_source_adapter.dart` from the reference was never
   ported - it wasn't real webcam capture either (hardcoded fake bytes despite the name), and
   SmartPoc doesn't target desktop.
 - **`lib/diagnostics/`** - `TelemetryService` (FPS/latency counters) + `HealthMonitor` (polls

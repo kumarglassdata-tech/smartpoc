@@ -30,6 +30,8 @@ class HomeScreen extends StatelessWidget {
 
   String _sourceLabel(SourceType type) {
     switch (type) {
+      case SourceType.metaGlasses:
+        return 'Meta Ray-Ban Glasses';
       case SourceType.phone:
         return 'Phone Camera';
       case SourceType.videoUpload:

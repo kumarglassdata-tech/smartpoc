@@ -23,4 +23,28 @@ plugins {
     id("org.jetbrains.kotlin.android") version "2.3.20" apply false
 }
 
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.PREFER_SETTINGS)
+    val localProperties = java.util.Properties().apply {
+        val propsFile = file("local.properties")
+        if (propsFile.exists()) {
+            propsFile.inputStream().use { load(it) }
+        }
+    }
+    repositories {
+        google()
+        mavenCentral()
+        maven {
+            url = uri("https://storage.googleapis.com/download.flutter.io")
+        }
+        maven {
+            url = uri("https://maven.pkg.github.com/facebook/meta-wearables-dat-android")
+            credentials {
+                username = "x-access-token"
+                password = System.getenv("GITHUB_TOKEN") ?: localProperties.getProperty("gpr.key") ?: localProperties.getProperty("GITHUB_TOKEN") ?: ""
+            }
+        }
+    }
+}
+
 include(":app")

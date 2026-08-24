@@ -4,7 +4,7 @@ import 'package:flutter/foundation.dart';
 
 import 'source_adapter.dart';
 
-enum SourceType { phone, videoUpload }
+enum SourceType { metaGlasses, phone, videoUpload }
 
 // Owns the active SourceAdapter and re-broadcasts its streams, so callers
 // don't need to know which adapter is live. Auto-falls back to phone if the

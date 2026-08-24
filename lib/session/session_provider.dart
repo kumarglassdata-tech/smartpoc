@@ -18,6 +18,7 @@ import '../pipeline/safety_memory_response.dart';
 import '../recommendation_utils.dart';
 import '../safety_memory/safety_memory_client.dart';
 import '../sources/camera_service.dart';
+import '../sources/meta_glasses_source_adapter.dart';
 import '../sources/phone_source_adapter.dart';
 import '../sources/source_adapter.dart';
 import '../sources/source_manager.dart';
@@ -150,6 +151,7 @@ class SessionProvider extends ChangeNotifier {
 
   SessionProvider({required this.cameraService, required this.locationService, required this.settingsProvider, required this.authProvider}) {
     sourceManager = SourceManager({
+      SourceType.metaGlasses: MetaGlassesSourceAdapter(location: locationService),
       SourceType.phone: PhoneSourceAdapter(camera: cameraService, location: locationService),
       SourceType.videoUpload: VideoUploadSourceAdapter(location: locationService),
     });

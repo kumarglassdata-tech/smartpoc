@@ -21,12 +21,14 @@ android {
     defaultConfig {
         // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
         applicationId = "com.smartpoc.app.smartpoc"
-        // You can update the following values to match your application needs.
-        // For more information, see: https://flutter.dev/to/review-gradle-config.
-        minSdk = flutter.minSdkVersion
+        // MWDAT SDK requires minimum Android 10 (API 29)
+        minSdk = 29
         targetSdk = 37
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+
+        manifestPlaceholders["mwdat_application_id"] = "1397106792389839"
+        manifestPlaceholders["mwdat_client_token"] = "AR|1397106792389839|b4974e0eaab94a57cbd68e7023ce904a"
     }
 
     buildTypes {
@@ -36,6 +38,13 @@ android {
             signingConfig = signingConfigs.getByName("debug")
         }
     }
+}
+
+dependencies {
+    implementation("androidx.concurrent:concurrent-futures:1.2.0")
+    implementation("com.meta.wearable:mwdat-core:0.9.0")
+    implementation("com.meta.wearable:mwdat-camera:0.9.0")
+    implementation("com.meta.wearable:mwdat-mockdevice:0.9.0")
 }
 
 kotlin {

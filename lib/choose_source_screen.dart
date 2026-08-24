@@ -3,8 +3,10 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import 'app_theme.dart';
+import 'features/meta_glasses/widgets/meta_glasses_preview_widget.dart';
 import 'live_session_screen.dart';
 import 'particle_background.dart';
+import 'services/meta_glasses_service.dart';
 import 'session/session_provider.dart';
 import 'sources/source_manager.dart';
 import 'sources/video_upload_source_adapter.dart';
@@ -20,7 +22,7 @@ class ChooseSourceScreen extends StatefulWidget {
 }
 
 class _ChooseSourceScreenState extends State<ChooseSourceScreen> {
-  SourceType _selected = SourceType.phone;
+  SourceType _selected = SourceType.metaGlasses;
   bool _isStarting = false;
   bool _isPicking = false;
   PlatformFile? _pickedFile;
@@ -32,10 +34,6 @@ class _ChooseSourceScreenState extends State<ChooseSourceScreen> {
       _error = null;
     });
     try {
-      // FilePicker on web uses a hidden <input type="file"> internally.
-      // Calling it outside a user-gesture context can throw a
-      // LateInitializationError if its internal state isn't ready yet -
-      // retrying once after a short delay resolves it.
       FilePickerResult? result;
       try {
         result = await FilePicker.platform.pickFiles(
@@ -44,7 +42,6 @@ class _ChooseSourceScreenState extends State<ChooseSourceScreen> {
           withData: true,
         );
       } catch (_) {
-        // Second attempt after a tick - handles web late-init edge case.
         await Future.delayed(const Duration(milliseconds: 80));
         result = await FilePicker.platform.pickFiles(
           type: FileType.custom,
@@ -113,6 +110,7 @@ class _ChooseSourceScreenState extends State<ChooseSourceScreen> {
     required IconData icon,
     required String title,
     required String subtitle,
+    Widget? trailing,
     bool enabled = true,
   }) {
     final selected = _selected == type;
@@ -134,13 +132,24 @@ class _ChooseSourceScreenState extends State<ChooseSourceScreen> {
           borderRadius: BorderRadius.circular(16),
           border: Border.all(
             color: selected ? AppColors.accent : AppColors.border,
+            width: selected ? 1.5 : 1.0,
           ),
         ),
         child: Row(
           children: [
-            Icon(
-              icon,
-              color: enabled ? AppColors.accentStrong : AppColors.textSecondary,
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: selected
+                    ? AppColors.accent.withValues(alpha: 0.15)
+                    : AppColors.surfaceMuted,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Icon(
+                icon,
+                color: enabled ? AppColors.accentStrong : AppColors.textSecondary,
+                size: 24,
+              ),
             ),
             const SizedBox(width: 14),
             Expanded(
@@ -151,6 +160,7 @@ class _ChooseSourceScreenState extends State<ChooseSourceScreen> {
                     title,
                     style: TextStyle(
                       fontWeight: FontWeight.w700,
+                      fontSize: 15,
                       color: enabled
                           ? AppColors.textPrimary
                           : AppColors.textSecondary,
@@ -161,15 +171,83 @@ class _ChooseSourceScreenState extends State<ChooseSourceScreen> {
                     subtitle,
                     style: TextStyle(
                       color: AppColors.textSecondary,
-                      fontSize: 13,
+                      fontSize: 12.5,
                     ),
                   ),
                 ],
               ),
             ),
+            ?trailing,
           ],
         ),
       ),
+    );
+  }
+
+  Widget _metaGlassesStatusBadge() {
+    final service = MetaGlassesService.instance;
+    return ValueListenableBuilder(
+      valueListenable: service.statusNotifier,
+      builder: (context, status, _) {
+        Color color = AppColors.textSecondary;
+        String text = 'Standby';
+
+        switch (status) {
+          case MetaGlassesStatus.streaming:
+            color = AppColors.success;
+            text = 'Streaming';
+            break;
+          case MetaGlassesStatus.connected:
+            color = AppColors.accent;
+            text = 'Connected';
+            break;
+          case MetaGlassesStatus.connecting:
+          case MetaGlassesStatus.registering:
+            color = Colors.amber;
+            text = 'Connecting';
+            break;
+          case MetaGlassesStatus.registered:
+            color = AppColors.accentStrong;
+            text = 'Registered';
+            break;
+          case MetaGlassesStatus.error:
+            color = AppColors.danger;
+            text = 'Error';
+            break;
+          case MetaGlassesStatus.disconnected:
+            color = AppColors.textSecondary;
+            text = 'Standby';
+            break;
+        }
+
+        return Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+          decoration: BoxDecoration(
+            color: color.withValues(alpha: 0.15),
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: color.withValues(alpha: 0.4)),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 6,
+                height: 6,
+                decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+              ),
+              const SizedBox(width: 5),
+              Text(
+                text,
+                style: TextStyle(
+                  color: color,
+                  fontWeight: FontWeight.w700,
+                  fontSize: 11,
+                ),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 
@@ -265,18 +343,35 @@ class _ChooseSourceScreenState extends State<ChooseSourceScreen> {
       body: ParticleBackground(
         child: Stack(
           children: [
-            Padding(
-              padding: const EdgeInsets.all(20),
+            SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(20, 16, 20, 96),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
+                  // Meta Ray-Ban Glasses Option (Primary)
+                  _sourceTile(
+                    type: SourceType.metaGlasses,
+                    icon: Icons.camera_alt_rounded,
+                    title: 'Meta Ray-Ban Glasses',
+                    subtitle: 'Stream live camera from Meta Ray-Ban smart glasses',
+                    trailing: _metaGlassesStatusBadge(),
+                  ),
+                  if (_selected == SourceType.metaGlasses) ...[
+                    const SizedBox(height: 12),
+                    const MetaGlassesPreviewWidget(),
+                  ],
+                  const SizedBox(height: 12),
+
+                  // Phone Camera Option
                   _sourceTile(
                     type: SourceType.phone,
-                    icon: Icons.videocam_outlined,
-                    title: 'Live Camera',
-                    subtitle: 'Stream from your phone camera now',
+                    icon: Icons.phone_android_rounded,
+                    title: 'Phone Camera',
+                    subtitle: 'Stream from your phone camera',
                   ),
                   const SizedBox(height: 12),
+
+                  // Recorded Video Option
                   _sourceTile(
                     type: SourceType.videoUpload,
                     icon: Icons.video_library_outlined,
@@ -284,35 +379,64 @@ class _ChooseSourceScreenState extends State<ChooseSourceScreen> {
                     subtitle: 'Process a photo or video file you already have',
                   ),
                   if (_selected == SourceType.videoUpload) _filePickerRow(),
+
                   if (_error != null) ...[
                     const SizedBox(height: 16),
-                    Text(_error!, style: TextStyle(color: AppColors.danger)),
-                  ],
-                  const Spacer(),
-                  FilledButton(
-                    onPressed: _isStarting ? null : _beginSession,
-                    child: _isStarting
-                        ? const SizedBox(
-                            height: 20,
-                            width: 20,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              color: Colors.white,
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: AppColors.danger.withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: AppColors.danger.withValues(alpha: 0.3)),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(Icons.error_outline_rounded, color: AppColors.danger, size: 20),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              _error!,
+                              style: TextStyle(color: AppColors.danger, fontSize: 13),
                             ),
-                          )
-                        : const Text('Begin Session'),
-                  ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),
-            // Connecting to the engines (loading ONNX models, opening the
-            // WebSocket, starting the camera) can take a few seconds - the
-            // button's own small spinner isn't obvious enough on its own.
+
+            // Bottom Fixed Action Button
+            Positioned(
+              left: 20,
+              right: 20,
+              bottom: 20,
+              child: FilledButton(
+                onPressed: _isStarting ? null : _beginSession,
+                style: FilledButton.styleFrom(
+                  minimumSize: const Size.fromHeight(52),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                ),
+                child: _isStarting
+                    ? const SizedBox(
+                        height: 20,
+                        width: 20,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
+                      )
+                    : const Text('Begin Live Session', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+              ),
+            ),
+
+            // Modal Progress Overlay
             if (_isStarting)
               Positioned.fill(
                 child: IgnorePointer(
                   child: Container(
-                    color: Colors.black.withValues(alpha: 0.35),
+                    color: Colors.black.withValues(alpha: 0.4),
                     alignment: Alignment.center,
                     child: Container(
                       padding: const EdgeInsets.symmetric(
@@ -332,7 +456,7 @@ class _ChooseSourceScreenState extends State<ChooseSourceScreen> {
                           CircularProgressIndicator(color: AppColors.accent),
                           const SizedBox(height: 16),
                           Text(
-                            'Connecting...',
+                            'Connecting to engines...',
                             style: TextStyle(
                               color: AppColors.textPrimary,
                               fontWeight: FontWeight.w600,
