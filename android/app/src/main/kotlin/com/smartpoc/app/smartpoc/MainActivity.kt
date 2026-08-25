@@ -229,14 +229,20 @@ class MainActivity : FlutterFragmentActivity(), MethodChannel.MethodCallHandler 
                 sendEvent(mapOf("type" to "stream_state", "state" to "STOPPED"))
                 result.success(true)
             }
-            "checkCameraPermission" -> checkPermission(Permission.CAMERA, result)
+            "checkCameraPermission" -> checkCameraPermission(result)
             "requestCameraPermission" -> {
                 mainHandler.post { requestWearablePermissionLauncher.launch(Permission.CAMERA) }
                 result.success(true)
             }
-            "checkMicrophonePermission" -> checkPermission(Permission.MICROPHONE, result)
+            "checkMicrophonePermission" -> {
+                val isGranted = ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+                result.success(isGranted)
+            }
             "requestMicrophonePermission" -> {
-                mainHandler.post { requestWearablePermissionLauncher.launch(Permission.MICROPHONE) }
+                val isGranted = ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+                if (!isGranted) {
+                    ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.RECORD_AUDIO), BT_PERMISSION_REQUEST_CODE)
+                }
                 result.success(true)
             }
             "getDiscoveredDevices" -> result.success(discoveredDeviceList)
@@ -244,10 +250,10 @@ class MainActivity : FlutterFragmentActivity(), MethodChannel.MethodCallHandler 
         }
     }
 
-    private fun checkPermission(permission: Permission, flutterResult: MethodChannel.Result?) {
+    private fun checkCameraPermission(flutterResult: MethodChannel.Result?) {
         datScope.launch {
             try {
-                Wearables.checkPermissionStatus(permission)
+                Wearables.checkPermissionStatus(Permission.CAMERA)
                     .onSuccess { status ->
                         val isGranted = status.toString().contains("GRANTED", ignoreCase = true)
                         flutterResult?.success(isGranted)
