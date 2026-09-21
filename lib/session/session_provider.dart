@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 
@@ -137,6 +138,8 @@ class SessionProvider extends ChangeNotifier {
   StatsService get statsService => StatsService(dbService: _dbService, userId: userId is int ? userId as int : 0);
   String? get lastTranscript => _lastTranscript;
   String? get lastVoiceResponse => _lastVoiceResponse;
+  bool get isRuntimeActive => _state.isRuntimeActive;
+  bool get isConnected => _state.isConnected;
 
   // Live (in-progress) view of the same accumulators, for LiveSessionScreen's
   // own display - lastSessionSummary only exists once stopRuntime() freezes it.
@@ -144,6 +147,7 @@ class SessionProvider extends ChangeNotifier {
   int get sessionObjectsSeen => _sessionDetectedItems.length;
   int get sessionMatches => _sessionMatches;
   List<String> get sessionDetectedItemNames => _sessionDetectedItems.keys.toList();
+  List<Map<String, String>> get sessionMatchedProducts => _sessionMatchedProducts.values.toList();
 
   PipelineResult? get lastPipelineResult => _lastPipelineResult;
   String? get lastPipelineError => _lastPipelineError;
@@ -162,6 +166,8 @@ class SessionProvider extends ChangeNotifier {
       sourceManager: sourceManager,
     );
     locationService.addListener(_onLocationChanged);
+    // Pre-warm ONNX models in the background on app start so startSession takes 0ms
+    unawaited(interactionEngineClient.init());
   }
 
   // Dedups on city, not every GPS tick - set_location is a "user has a geo
@@ -188,6 +194,9 @@ class SessionProvider extends ChangeNotifier {
     contextEngineClient.onError = (error) {
       _isProcessingFrame = false;
       sourceManager.notifyFrameProcessed();
+      if (_state.isRuntimeActive) {
+        _sendLatestFrameToContextEngine();
+      }
       notifyListeners();
     };
     interactionEngineClient.onStateChanged = notifyListeners;
@@ -212,15 +221,26 @@ class SessionProvider extends ChangeNotifier {
     }
 
     try {
-      await step('CE.connect', () => contextEngineClient.connect());
-      await step('IE.init', () => interactionEngineClient.init());
-      final uid = await authProvider.resolveUserId();
-      final userIdentifier = (uid != null && uid != 0)
-          ? uid.toString()
-          : (authProvider.email.isNotEmpty ? authProvider.email : 'default_user');
-      await step('IE.connect', () => interactionEngineClient.connect(sessionId: sessionId, userId: userIdentifier));
-      await step('IE.setWakeWordEnabled', () => interactionEngineClient.setWakeWordEnabled(settingsProvider.wakeWordEnabled));
-      await step('IE.startVad', () => interactionEngineClient.startVad());
+      final uidFuture = authProvider.resolveUserId();
+      final ceConnectFuture = step('CE.connect', () => contextEngineClient.connect());
+      final ieSetupFuture = () async {
+        await step('IE.init', () => interactionEngineClient.init());
+        final uid = await uidFuture;
+        final userIdentifier = (uid != null && uid != 0)
+            ? uid.toString()
+            : (authProvider.email.isNotEmpty ? authProvider.email : 'default_user');
+        await step('IE.connect', () => interactionEngineClient.connect(sessionId: sessionId, userId: userIdentifier));
+        await Future.wait([
+          step('IE.setWakeWordEnabled', () => interactionEngineClient.setWakeWordEnabled(settingsProvider.wakeWordEnabled)),
+          step('IE.startVad', () => interactionEngineClient.startVad()),
+        ]);
+      }();
+
+      await Future.wait([
+        ceConnectFuture,
+        ieSetupFuture,
+      ]);
+
       unawaited(locationService.start());
       healthMonitor.start();
       _state = _state.copyWith(isConnected: true, lastError: null);
@@ -239,6 +259,9 @@ class SessionProvider extends ChangeNotifier {
     _pipelineTicking = true;
     notifyListeners();
     try {
+      final ceActivity = ceOutput['Myna_Context']?['activity_information'] ?? ceOutput['activity_information'];
+      debugPrint('>>> [PIPELINE_TICK] CE Activity: $ceActivity');
+
       final result = await runPipeline(
         ceOutput,
         behaviourEngineClient: behaviourEngineClient,
@@ -248,6 +271,8 @@ class SessionProvider extends ChangeNotifier {
         sessionId: sessionId,
         activeVoiceNlu: interactionEngineClient.activeVoiceNlu,
       );
+
+      debugPrint('>>> [BE_RESPONSE] state: ${result.behaviourEngineResponse.behavioralState}, relevance: ${result.behaviourEngineResponse.relevanceScore}, product: ${result.behaviourEngineResponse.recommendedProduct}');
       // A skipped ah/sma call returns empty placeholders (see
       // pipeline_coordinator.dart) - carry the last real value forward so
       // watchers never see a flash of "no data" on a skipped tick.
@@ -278,24 +303,45 @@ class SessionProvider extends ChangeNotifier {
       // in the Matched products cards - counting the merge here would let a
       // /buy-only hit inflate a number that's supposed to mean "recommend
       // actually returned N real products this tick".
-      final tickRecommendations = extractEcomRecommendations(result.ecomAdHandlerRaw, limit: 20);
-      final tickMatchCount = extractRecommendations(result.ecomAdHandlerRaw.recommendPost, limit: 20).length;
+      final now = DateTime.now();
+      final timeStr = '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}:${now.second.toString().padLeft(2, '0')}';
+      final groundedTarget = result.contextEngineResponse.gazeGrounding.groundedTarget;
+      final relevanceScore = result.behaviourEngineResponse.relevanceScore ?? result.behaviourEngineResponse.commerceScore;
+      final behavioralState = result.behaviourEngineResponse.behavioralState;
+      final vlmDescription = result.contextEngineResponse.vlmDescription;
+      final beOutputJson = jsonEncode(result.behaviourEngineRaw);
+
+      final tickRecommendations = extractEcomRecommendations(
+        result.ecomAdHandlerRaw,
+        limit: 20,
+        groundedTarget: groundedTarget,
+        relevanceScore: relevanceScore,
+        behavioralState: behavioralState,
+        vlmDescription: vlmDescription,
+        beOutputJson: beOutputJson,
+        capturedTime: timeStr,
+      );
+      final tickMatchCount = tickRecommendations.length;
       _sessionMatches += tickMatchCount;
       final tickHasMatch = tickMatchCount > 0;
       final newlySeenNames = sceneObjectNames.where((name) => !_sessionDetectedItems.containsKey(name)).toSet();
       for (final name in sceneObjectNames) {
-        _sessionDetectedItems[name] = (_sessionDetectedItems[name] ?? false) || tickHasMatch;
+        final isRelevant = (groundedTarget != null && name.toLowerCase().contains(groundedTarget.toLowerCase())) ||
+                           (sceneObjectNames.length == 1);
+        _sessionDetectedItems[name] = (_sessionDetectedItems[name] ?? false) || (tickHasMatch && isRelevant);
+      }
+      if (groundedTarget != null && groundedTarget.isNotEmpty && groundedTarget.toLowerCase() != 'none') {
+        _sessionDetectedItems[groundedTarget] = (_sessionDetectedItems[groundedTarget] ?? false) || tickHasMatch;
       }
       unawaited(statsService.recordDetections(objectsSeen: newlySeenNames.length, matches: tickMatchCount));
 
       // Frozen into SessionSummary on stopRuntime() - real matched products
       // (deduped by name), the last VLM caption seen, and the ecom hub's own
-      // /lifebalance response, all otherwise only visible mid-session.
+      // responses, all otherwise only visible mid-session.
       for (final product in tickRecommendations) {
         final name = product['name'];
         if (name != null) _sessionMatchedProducts[name] = product;
       }
-      final vlmDescription = result.contextEngineResponse.vlmDescription;
       if (vlmDescription != null && vlmDescription.isNotEmpty) {
         _sessionLastVlmDescription = vlmDescription;
       }
@@ -322,9 +368,24 @@ class SessionProvider extends ChangeNotifier {
     } finally {
       _pipelineTicking = false;
       _isProcessingFrame = false;
+      _framesSentInBurst++;
       sourceManager.notifyFrameProcessed();
       notifyListeners();
+      if (_state.isRuntimeActive) {
+        if (_framesSentInBurst >= 2) {
+          // After sending 2 frames, skip immediate re-send and wait for next fresh frame
+          _framesSentInBurst = 0;
+        } else {
+          _sendLatestFrameToContextEngine();
+        }
+      }
     }
+  }
+
+  void recordPipelineTickForTesting(PipelineResult result) {
+    _lastPipelineResult = result;
+    _lastPipelineError = null;
+    notifyListeners();
   }
 
   // For the debug screen's "paste a CE JSON and run it" tool - runs the same
@@ -337,6 +398,44 @@ class SessionProvider extends ChangeNotifier {
   Future<void> startRuntime() async {
     if (_state.isRuntimeActive) return;
     resetPipelineGates();
+
+    // Fresh Session ID for every new session run
+    final freshSessionId = InteractionEngineClient.generateSessionId();
+    _sessionId = freshSessionId;
+
+    // Ensure Context Engine is cleanly connected with fresh session lifecycle
+    contextEngineClient.onJsonOutput = _runPipeline;
+    contextEngineClient.onError = (error) {
+      _isProcessingFrame = false;
+      sourceManager.notifyFrameProcessed();
+      if (_state.isRuntimeActive) {
+        _sendLatestFrameToContextEngine();
+      }
+      notifyListeners();
+    };
+    // Reconnect Context Engine and Interaction Engine concurrently with the fresh session ID
+    final ceConnectFuture = () async {
+      try {
+        await contextEngineClient.connect();
+      } catch (e) {
+        debugPrint('[SessionProvider] CE connect during startRuntime: $e');
+      }
+    }();
+
+    final ieConnectFuture = () async {
+      try {
+        final uid = await authProvider.resolveUserId();
+        final userIdentifier = (uid != null && uid != 0)
+            ? uid.toString()
+            : (authProvider.email.isNotEmpty ? authProvider.email : 'default_user');
+        await interactionEngineClient.connect(sessionId: freshSessionId, userId: userIdentifier);
+      } catch (e) {
+        debugPrint('[SessionProvider] IE connect during startRuntime: $e');
+      }
+    }();
+
+    await Future.wait([ceConnectFuture, ieConnectFuture]);
+
     // Without this, a fresh session's screens read the previous session's
     // last pipeline result (VLM caption, relevance score, ecom raw) until
     // the new session's own first tick lands - looks like "showing the
@@ -354,6 +453,9 @@ class SessionProvider extends ChangeNotifier {
     _sessionLifestyleScore = null;
     _sessionLifestyleBreakdown = {};
     _lastSessionSummary = null;
+    _framesSentInBurst = 0;
+    _isProcessingFrame = false;
+    _latestFrameBytes = null;
     unawaited(statsService.recordSessionStarted());
 
     await sourceManager.startActive();
@@ -364,48 +466,86 @@ class SessionProvider extends ChangeNotifier {
     // since DbService.startSession already swallows its own errors.
     unawaited(_dbService.startSession(numericUserId, sessionId));
     unawaited(_sessionHistoryService.recordSessionStarted(sessionId));
-    _state = _state.copyWith(isRuntimeActive: true);
+    _state = _state.copyWith(isRuntimeActive: true, isConnected: true);
     notifyListeners();
   }
 
   bool _isProcessingFrame = false;
+  Uint8List? _latestFrameBytes;
+  int _framesSentInBurst = 0;
 
   void _onSourceFrame(VideoFrame frame) {
-    if (_isProcessingFrame) return;
+    _latestFrameBytes = frame.bytes;
+    if (!_isProcessingFrame && _state.isRuntimeActive) {
+      _sendLatestFrameToContextEngine();
+    }
+  }
+
+  void _sendLatestFrameToContextEngine() {
+    final bytes = _latestFrameBytes;
+    if (bytes == null || !_state.isRuntimeActive || _isProcessingFrame) return;
     _isProcessingFrame = true;
     final input = ContextEngineInput(
       gpsCoordinates: GpsCoordinates(
-        lat: locationService.latitude ?? 12.9716,
-        lon: locationService.longitude ?? 77.5946,
+        lat: locationService.latitude ?? 0.0,
+        lon: locationService.longitude ?? 0.0,
       ),
       temperatureC: 38.5,
       userId: userId,
+      sessionId: sessionId,
     );
-    contextEngineClient.sendFrame(input, frame.bytes);
+    contextEngineClient.sendFrame(input, bytes);
     telemetryService.incrementCapturedFrames();
     _state = _state.copyWith(framesCaptured: _state.framesCaptured + 1);
     notifyListeners();
   }
 
-  Future<void> stopRuntime() async {
-    if (!_state.isRuntimeActive) return;
+  Future<void> stopRuntime({Duration? fallbackDuration}) async {
+    if (!_state.isRuntimeActive && fallbackDuration == null) return;
+    final startedAt = _runtimeStartedAt;
+    final measuredDuration = startedAt != null ? DateTime.now().difference(startedAt) : Duration.zero;
+    final duration = measuredDuration > Duration.zero ? measuredDuration : (fallbackDuration ?? Duration.zero);
+
     _isProcessingFrame = false;
+    _latestFrameBytes = null;
+    _framesSentInBurst = 0;
     await sourceManager.stopActive();
     await _videoSub?.cancel();
     _videoSub = null;
+
+    // Disconnect Context Engine on session completion so socket is cleanly closed
+    try {
+      await contextEngineClient.disconnect();
+    } catch (_) {}
+
+    // Immediately stop any assistant speech playback and pause voice activity detection
+    try {
+      await interactionEngineClient.stopAudioPlayback();
+      await interactionEngineClient.stopVad();
+    } catch (_) {}
     // Was awaited - blocked the transition to SessionCompleteScreen on a live
     // Postgres round-trip (DbService.endSession already swallows its own
     // errors, so there's nothing here that needs waiting for).
     if (_sessionId != null) unawaited(_dbService.endSession(_sessionId!));
 
-    final startedAt = _runtimeStartedAt;
-    final duration = startedAt != null ? DateTime.now().difference(startedAt) : Duration.zero;
+    final matchedProductList = _sessionMatchedProducts.values.toList();
     _lastSessionSummary = SessionSummary(
       duration: duration,
       objectsSeen: _sessionDetectedItems.length,
-      matches: _sessionMatches,
-      detectedItems: _sessionDetectedItems.entries.map((e) => DetectedSessionItem(className: e.key, matched: e.value)).toList(),
-      matchedProducts: _sessionMatchedProducts.values.toList(),
+      matches: _sessionMatches > 0 ? _sessionMatches : matchedProductList.length,
+      detectedItems: _sessionDetectedItems.entries.map((e) {
+        final detectedKey = e.key.toLowerCase();
+        final isDirectMatch = e.value;
+        final isMatchedInCatalog = matchedProductList.any((prod) {
+          final prodName = (prod['name'] ?? '').toLowerCase();
+          final keyWords = detectedKey.split(RegExp(r'\s+')).where((w) => w.length > 2);
+          return prodName.contains(detectedKey) ||
+                 detectedKey.contains(prodName) ||
+                 keyWords.any((kw) => prodName.contains(kw));
+        });
+        return DetectedSessionItem(className: e.key, matched: isDirectMatch || isMatchedInCatalog);
+      }).toList(),
+      matchedProducts: matchedProductList,
       vlmDescription: _sessionLastVlmDescription,
       lifestyleScore: _sessionLifestyleScore,
       lifestyleBreakdown: _sessionLifestyleBreakdown,

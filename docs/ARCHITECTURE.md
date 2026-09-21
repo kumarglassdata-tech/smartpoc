@@ -204,7 +204,7 @@ backend, called "Action Hub" there). Two real contract bugs found and fixed earl
   debounce) - ported from `C:\Dev\smartglass_flutter`'s `wake_word_detector.dart`, same models
   (`assets/models/*.onnx`, ~5.6MB total).
 - Once triggered (or once VAD alone detects speech, if wake word is off), Silero VAD
-  (`flutter_silero_vad`, threshold 0.5) drives `start_of_speech` -> binary PCM16 streaming ->
+  (`flutter_silero_vad`, threshold 0.9) drives `start_of_speech` -> binary PCM16 streaming ->
   `end_of_speech` (5s silence timeout). **Haptic feedback**: `HapticFeedback.lightImpact()` on
   `start_of_speech`, `.mediumImpact()` on `end_of_speech`.
 - After any reply, the conversation stays open for **5 seconds** (`_conversationTimeout`) without

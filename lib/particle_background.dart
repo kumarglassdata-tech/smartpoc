@@ -83,6 +83,7 @@ class _ParticleBackgroundState extends State<ParticleBackground> with SingleTick
   @override
   Widget build(BuildContext context) {
     return Stack(
+      fit: StackFit.expand,
       children: [
         Positioned.fill(
           child: IgnorePointer(

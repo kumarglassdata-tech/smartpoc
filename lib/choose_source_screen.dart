@@ -22,11 +22,17 @@ class ChooseSourceScreen extends StatefulWidget {
 }
 
 class _ChooseSourceScreenState extends State<ChooseSourceScreen> {
-  SourceType _selected = SourceType.metaGlasses;
+  SourceType _selected = SourceType.phone;
   bool _isStarting = false;
   bool _isPicking = false;
   PlatformFile? _pickedFile;
   String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    MetaGlassesService.instance.getBatteryLevel();
+  }
 
   Future<void> _pickFile() async {
     setState(() {
@@ -75,6 +81,9 @@ class _ChooseSourceScreenState extends State<ChooseSourceScreen> {
     });
     final session = context.read<SessionProvider>();
     try {
+      // Proactively request microphone permission for voice interaction
+      await session.interactionEngineClient.requestMicrophonePermission();
+
       if (_selected == SourceType.videoUpload) {
         final file = _pickedFile!;
         final ext = (file.extension ?? '').toLowerCase();
@@ -189,63 +198,85 @@ class _ChooseSourceScreenState extends State<ChooseSourceScreen> {
     return ValueListenableBuilder(
       valueListenable: service.statusNotifier,
       builder: (context, status, _) {
-        Color color = AppColors.textSecondary;
-        String text = 'Standby';
+        return ValueListenableBuilder<int?>(
+          valueListenable: service.batteryLevelNotifier,
+          builder: (context, battery, _) {
+            Color color = AppColors.textSecondary;
+            String text = 'Standby';
 
-        switch (status) {
-          case MetaGlassesStatus.streaming:
-            color = AppColors.success;
-            text = 'Streaming';
-            break;
-          case MetaGlassesStatus.connected:
-            color = AppColors.accent;
-            text = 'Connected';
-            break;
-          case MetaGlassesStatus.connecting:
-          case MetaGlassesStatus.registering:
-            color = Colors.amber;
-            text = 'Connecting';
-            break;
-          case MetaGlassesStatus.registered:
-            color = AppColors.accentStrong;
-            text = 'Registered';
-            break;
-          case MetaGlassesStatus.error:
-            color = AppColors.danger;
-            text = 'Error';
-            break;
-          case MetaGlassesStatus.disconnected:
-            color = AppColors.textSecondary;
-            text = 'Standby';
-            break;
-        }
+            switch (status) {
+              case MetaGlassesStatus.streaming:
+                color = AppColors.success;
+                text = 'Streaming';
+                break;
+              case MetaGlassesStatus.connected:
+                color = AppColors.accent;
+                text = 'Connected';
+                break;
+              case MetaGlassesStatus.connecting:
+              case MetaGlassesStatus.registering:
+                color = Colors.amber;
+                text = 'Connecting';
+                break;
+              case MetaGlassesStatus.registered:
+                color = AppColors.accentStrong;
+                text = 'Registered';
+                break;
+              case MetaGlassesStatus.error:
+                color = AppColors.danger;
+                text = 'Error';
+                break;
+              case MetaGlassesStatus.disconnected:
+                color = AppColors.textSecondary;
+                text = 'Standby';
+                break;
+            }
 
-        return Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-          decoration: BoxDecoration(
-            color: color.withValues(alpha: 0.15),
-            borderRadius: BorderRadius.circular(20),
-            border: Border.all(color: color.withValues(alpha: 0.4)),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 6,
-                height: 6,
-                decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+            final hasBattery = (status == MetaGlassesStatus.connected ||
+                    status == MetaGlassesStatus.streaming ||
+                    status == MetaGlassesStatus.registered) &&
+                battery != null &&
+                battery >= 0;
+
+            return Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              decoration: BoxDecoration(
+                color: color.withValues(alpha: 0.15),
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: color.withValues(alpha: 0.4)),
               ),
-              const SizedBox(width: 5),
-              Text(
-                text,
-                style: TextStyle(
-                  color: color,
-                  fontWeight: FontWeight.w700,
-                  fontSize: 11,
-                ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 6,
+                    height: 6,
+                    decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+                  ),
+                  const SizedBox(width: 5),
+                  Text(
+                    text,
+                    style: TextStyle(
+                      color: color,
+                      fontWeight: FontWeight.w700,
+                      fontSize: 11,
+                    ),
+                  ),
+                  if (hasBattery) ...[
+                    const SizedBox(width: 5),
+                    Text(
+                      '· $battery%',
+                      style: TextStyle(
+                        color: color,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 11,
+                      ),
+                    ),
+                  ],
+                ],
               ),
-            ],
-          ),
+            );
+          },
         );
       },
     );

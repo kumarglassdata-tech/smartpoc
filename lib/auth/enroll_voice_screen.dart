@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:record/record.dart';
@@ -25,7 +26,7 @@ class _EnrollVoiceScreenState extends State<EnrollVoiceScreen> {
   
   bool _isInit = false;
   bool _isRecording = false;
-  List<int> _audioBuffer = [];
+  final List<int> _audioBuffer = [];
   StreamSubscription<Uint8List>? _audioSub;
 
   String _statusMessage = "Press the button below and read the text.";
@@ -72,13 +73,21 @@ class _EnrollVoiceScreenState extends State<EnrollVoiceScreen> {
   Future<void> _startRecording() async {
     if (await _audioRecorder.hasPermission()) {
       _audioBuffer.clear();
-      final stream = await _audioRecorder.startStream(
-        const RecordConfig(
-          encoder: AudioEncoder.pcm16bits, 
-          sampleRate: 16000, 
-          numChannels: 1,
-        ),
-      );
+      final config = kIsWeb
+          ? const RecordConfig(
+              encoder: AudioEncoder.pcm16bits,
+              sampleRate: 16000,
+              numChannels: 1,
+            )
+          : const RecordConfig(
+              encoder: AudioEncoder.pcm16bits,
+              sampleRate: 16000,
+              numChannels: 1,
+              autoGain: true,
+              echoCancel: true,
+              noiseSuppress: true,
+            );
+      final stream = await _audioRecorder.startStream(config);
       
       _audioSub = stream.listen((data) {
         _audioBuffer.addAll(data);
@@ -190,7 +199,7 @@ class _EnrollVoiceScreenState extends State<EnrollVoiceScreen> {
                   border: Border.all(color: AppColors.border, width: 1.5),
                   boxShadow: [
                     BoxShadow(
-                      color: Colors.black.withOpacity(0.05),
+                      color: Colors.black.withValues(alpha: 0.05),
                       blurRadius: 10,
                       offset: const Offset(0, 4),
                     ),
@@ -230,7 +239,7 @@ class _EnrollVoiceScreenState extends State<EnrollVoiceScreen> {
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
                 decoration: BoxDecoration(
-                  color: _isRecording ? Colors.red.withOpacity(0.1) : AppColors.accentTint,
+                  color: _isRecording ? Colors.red.withValues(alpha: 0.1) : AppColors.accentTint,
                   borderRadius: BorderRadius.circular(10),
                 ),
                 child: Text(
@@ -273,7 +282,7 @@ class _EnrollVoiceScreenState extends State<EnrollVoiceScreen> {
                         color: _isRecording ? Colors.red : AppColors.accent,
                         boxShadow: [
                           BoxShadow(
-                            color: (_isRecording ? Colors.red : AppColors.accent).withOpacity(0.4),
+                            color: (_isRecording ? Colors.red : AppColors.accent).withValues(alpha: 0.4),
                             blurRadius: 20,
                             spreadRadius: 4,
                           ),
@@ -320,7 +329,7 @@ class _EnrollVoiceScreenState extends State<EnrollVoiceScreen> {
                         border: Border.all(color: AppColors.accent, width: 2.5),
                         boxShadow: [
                           BoxShadow(
-                            color: AppColors.accent.withOpacity(0.2),
+                            color: AppColors.accent.withValues(alpha: 0.2),
                             blurRadius: 15,
                             spreadRadius: 2,
                           ),

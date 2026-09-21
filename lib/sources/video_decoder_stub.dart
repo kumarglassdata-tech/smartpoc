@@ -1,15 +1,46 @@
-import 'dart:typed_data';
+import 'dart:async';
+import 'dart:io';
+import 'package:flutter/services.dart';
+import 'package:path_provider/path_provider.dart';
 
-// Native (Android/iOS) video frame extraction. video_thumbnail (the usual
-// package for this) is unmaintained and its Gradle script uses the removed
-// jcenter() repo, breaking the build on modern AGP - so real video-file
-// frame extraction isn't available here. Image uploads (the common case)
-// are unaffected; a video upload falls back to the adapter's placeholder
-// frame instead of a real decoded one.
+// Native (Android/iOS) video frame extraction powered by MediaMetadataRetriever
+// via MethodChannel('com.smartpoc.app/video_decoder').
+// Extracts real 640x480 JPEG frames matching the exact live camera pipeline format.
 class VideoDecoder {
-  Future<void> loadVideo(Uint8List bytes, {String? fileName}) async {}
+  static const _channel = MethodChannel('com.smartpoc.app/video_decoder');
+  File? _tempFile;
 
-  Future<Uint8List?> getNextFrame() async => null;
+  Future<void> loadVideo(Uint8List bytes, {String? fileName}) async {
+    try {
+      final tempDir = await getTemporaryDirectory();
+      final ext = fileName?.split('.').last.toLowerCase() ?? 'mp4';
+      _tempFile = File('${tempDir.path}/upload_stream_video_${DateTime.now().millisecondsSinceEpoch}.$ext');
+      await _tempFile!.writeAsBytes(bytes, flush: true);
 
-  Future<void> dispose() async {}
+      await _channel.invokeMethod('loadVideo', {
+        'filePath': _tempFile!.path,
+      });
+    } catch (e) {
+      // Graceful fallback
+    }
+  }
+
+  Future<Uint8List?> getNextFrame() async {
+    try {
+      final result = await _channel.invokeMethod<Uint8List>('getNextFrame');
+      return result;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> dispose() async {
+    try {
+      await _channel.invokeMethod('dispose');
+      if (_tempFile != null && await _tempFile!.exists()) {
+        await _tempFile!.delete();
+      }
+    } catch (_) {}
+    _tempFile = null;
+  }
 }

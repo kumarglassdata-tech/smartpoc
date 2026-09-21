@@ -120,8 +120,8 @@ class _DebugScreenState extends State<DebugScreen> {
     final locationService = _session.locationService;
     final input = ContextEngineInput(
       gpsCoordinates: GpsCoordinates(
-        lat: locationService.latitude ?? 12.9716,
-        lon: locationService.longitude ?? 77.5946,
+        lat: locationService.latitude ?? 0.0,
+        lon: locationService.longitude ?? 0.0,
       ),
       temperatureC: 38.5,
       facingMode: 'environment',

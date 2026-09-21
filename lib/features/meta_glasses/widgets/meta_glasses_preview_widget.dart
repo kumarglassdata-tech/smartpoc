@@ -188,6 +188,58 @@ class MetaGlassesPreviewWidget extends StatelessWidget {
                       },
                     ),
                   ),
+
+                  // Top Right: Glasses Battery Level Indicator
+                  Positioned(
+                    top: 12,
+                    right: 12,
+                    child: ValueListenableBuilder<int?>(
+                      valueListenable: service.batteryLevelNotifier,
+                      builder: (context, battery, _) {
+                        if (battery == null || battery < 0) return const SizedBox.shrink();
+
+                        final Color batteryColor = battery > 50
+                            ? AppColors.success
+                            : battery > 20
+                                ? Colors.amber
+                                : AppColors.danger;
+
+                        final IconData batteryIcon = battery > 80
+                            ? Icons.battery_full_rounded
+                            : battery > 60
+                                ? Icons.battery_6_bar_rounded
+                                : battery > 40
+                                    ? Icons.battery_4_bar_rounded
+                                    : battery > 20
+                                        ? Icons.battery_2_bar_rounded
+                                        : Icons.battery_alert_rounded;
+
+                        return Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+                          decoration: BoxDecoration(
+                            color: Colors.black.withValues(alpha: 0.6),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: Colors.white12),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(batteryIcon, color: batteryColor, size: 14),
+                              const SizedBox(width: 4),
+                              Text(
+                                '$battery%',
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 11,
+                                ),
+                              ),
+                            ],
+                          ),
+                        );
+                      },
+                    ),
+                  ),
                 ],
               ),
             ),

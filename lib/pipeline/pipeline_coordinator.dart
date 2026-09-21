@@ -108,52 +108,26 @@ Future<PipelineResult> runPipeline(
     _lastSafetySceneObjects = sceneObjectNames;
   }
 
-  final behaviourEngineInput = BehaviourEngineInput(
-    sessionId: sessionId,
-    userId: contextEngineResponse.userId,
-    timestampMs: contextEngineResponse.timestampMs,
-    overallConfidence: contextEngineResponse.overallConfidence,
-    gazeGrounding: GazeGrounding(
-      groundedTarget: contextEngineResponse.gazeGrounding.groundedTarget,
-      gazeCoordinates: _coordinatesFromXY(
-        contextEngineResponse.gazeGrounding.x,
-        contextEngineResponse.gazeGrounding.y,
-      ),
-      alignmentScore: contextEngineResponse.gazeGrounding.alignmentScore,
-      spatialProximityPx: contextEngineResponse.gazeGrounding.spatialProximityPx,
-    ),
-    sceneObjects: contextEngineResponse.sceneObjects
-        .map(
-          (sceneObject) => SceneObject(
-            objectId: sceneObject.objectId?.toString(),
-            className: sceneObject.className,
-            bboxXyxy: sceneObject.bboxXyxy,
-          ),
-        )
-        .toList(),
-    interactionPrimitives: InteractionPrimitives(
-      wristPosition: _coordinatesFromMap(contextEngineResponse.wristPosition),
-      pickupActive: contextEngineResponse.handEvent.eventType == 'pickup',
-      pickupObjectId: contextEngineResponse.handEvent.eventType == 'pickup'
-          ? contextEngineResponse.handEvent.overlapObjectId
-          : null,
-      shelfReachActive: contextEngineResponse.shelfReachActive,
-      // No product-rotation signal from the context engine yet - stays false.
-    ),
-    handObjectEvents: contextEngineResponse.handEvent.eventType != 'none'
-        ? [
-            HandObjectEvent(
-              eventType: contextEngineResponse.handEvent.eventType,
-              objectId: contextEngineResponse.handEvent.overlapObjectId,
-            ),
-          ]
-        : const [],
-    omniContextVlm: contextEngineResponse.omniContextVlm,
-    locationInformation: contextEngineResponse.locationInformation,
-    gpsCoordinates: contextEngineResponse.gpsCoordinates,
-    voiceNlu: activeVoiceNlu,
-  );
-  final behaviourEngineRaw = await behaviourEngineClient.process(behaviourEngineInput);
+  // Send CE output as-is in its exact raw format (with Myna_Context wrapper)
+  final Map<String, dynamic> bePayload = contextEngineOutput.containsKey('Myna_Context')
+      ? Map<String, dynamic>.from(contextEngineOutput)
+      : {'Myna_Context': contextEngineOutput};
+
+  // Only inject voice_nlu into Myna_Context when IE has active voice NLU data (not null)
+  if (activeVoiceNlu != null) {
+    final nluJson = activeVoiceNlu.toJson();
+    final mynaContext = bePayload['Myna_Context'];
+    if (mynaContext is Map<String, dynamic>) {
+      mynaContext['voice_nlu'] = nluJson;
+    } else if (mynaContext is Map) {
+      bePayload['Myna_Context'] = {
+        ...mynaContext,
+        'voice_nlu': nluJson,
+      };
+    }
+  }
+
+  final behaviourEngineRaw = await behaviourEngineClient.process(bePayload);
   final behaviourEngineResponse = BehaviourEngineResponse.parse(behaviourEngineRaw);
 
   // relevance_score and top_salient_objects come from BE's response (both
@@ -171,16 +145,28 @@ Future<PipelineResult> runPipeline(
       .where((object) => object.className != null && object.salienceScore != null)
       .map((object) => SalientObject(className: object.className!, salienceScore: object.salienceScore!))
       .toList();
-  var relevanceScore = behaviourEngineResponse.relevanceScore ?? 0;
-  if (relevanceScore == 0 && topSalientObjects.isNotEmpty) {
-    relevanceScore = topSalientObjects.first.salienceScore;
+  final isLifestyleFrame = behaviourEngineResponse.frameType == 'lifestyle';
+  final isGateOpen = behaviourEngineResponse.gateOpen == true;
+
+  // For commerce frame: send relevance_score directly.
+  // For lifestyle frame: if gate_open == true, send commerce_score.
+  double scoreForAh;
+  if (isLifestyleFrame) {
+    if (isGateOpen) {
+      scoreForAh = (behaviourEngineResponse.commerceScore ?? 0).toDouble();
+    } else {
+      scoreForAh = 0.0;
+    }
+  } else {
+    scoreForAh = (behaviourEngineResponse.relevanceScore ?? 0).toDouble();
   }
+
   final ecomHubInput = EcomHubInput(
     timestampMs: contextEngineResponse.timestampMs,
-    relevanceScore: relevanceScore,
+    relevanceScore: scoreForAh,
     topSalientObjects: topSalientObjects.isNotEmpty
         ? topSalientObjects
-        : [SalientObject(className: gazeTarget ?? 'unknown', salienceScore: relevanceScore)],
+        : [SalientObject(className: gazeTarget ?? 'unknown', salienceScore: scoreForAh)],
     userId: userId,
   );
 
@@ -192,7 +178,7 @@ Future<PipelineResult> runPipeline(
       sessionId: sessionId,
       behavioralState: behaviourEngineResponse.behavioralState,
       confidenceScore: behaviourEngineResponse.stateConfidence,
-      relevanceScore: relevanceScore,
+      relevanceScore: scoreForAh,
       hesitationScore: behaviourEngineResponse.hesitationScore,
       gazeTarget: gazeTarget,
       sceneObjects: contextEngineResponse.sceneObjects
@@ -205,16 +191,17 @@ Future<PipelineResult> runPipeline(
     ),
   );
 
-  // Ecom Hub re-fires on scene_objects/grounded_target changing, or on
-  // relevance climbing meaningfully on the SAME object - sustained dwell on
-  // one object raising relevance toward real purchase intent (e.g. 40% ->
-  // 97%) is exactly the moment a fresh /buy call matters most, and it would
-  // otherwise never re-fire since the scene never "changes" while held still.
-  final relevanceRose = relevanceScore - _lastEcomRelevance >= 0.15;
-  final shouldRunEcom = _lastEcomSceneObjects == null ||
-      !_setEquals(sceneObjectNames, _lastEcomSceneObjects!) ||
-      groundedTarget != _lastEcomGazeTarget ||
-      relevanceRose;
+  // Ecom Hub re-fires on:
+  // - lifestyle frame: gate_open == true and commerce_score > 0
+  // - commerce frame: active relevance_score > 0, scene objects changing, gaze target changing, or relevance rising
+  final relevanceRose = scoreForAh - _lastEcomRelevance >= 0.15;
+  final shouldRunEcom = isLifestyleFrame
+      ? (isGateOpen && scoreForAh > 0.0)
+      : (scoreForAh > 0.0 ||
+          _lastEcomSceneObjects == null ||
+          !_setEquals(sceneObjectNames, _lastEcomSceneObjects!) ||
+          groundedTarget != _lastEcomGazeTarget ||
+          relevanceRose);
 
   // /inp primes the server's context for this user (gaze_target/scene_objects/
   // top_salient_objects) - /buy and /recommend read that just-set context back,
@@ -229,27 +216,33 @@ Future<PipelineResult> runPipeline(
   } else {
     try {
       final inputResult = await ecomAdHandlerClient.postInput(ecomHubInput);
+      final productQuery = gazeTarget ?? (topSalientObjects.isNotEmpty ? topSalientObjects.first.className : null);
       final remainingResults = await Future.wait([
-        ecomAdHandlerClient.getBuy(ecomHubInput),
-        ecomAdHandlerClient.getRecommend(),
-        ecomAdHandlerClient.postRecommend(ecomHubInput),
-        ecomAdHandlerClient.getAnalyze(),
-        ecomAdHandlerClient.getLifebalance(),
+        ecomAdHandlerClient.getBuy(userId: userId, className: productQuery),
+        ecomAdHandlerClient.getRecommend(userId: userId),
+        if (productQuery != null && productQuery.isNotEmpty)
+          ecomAdHandlerClient.getInstantRecommendations(
+            product: productQuery,
+            relevanceScore: scoreForAh,
+            userId: userId,
+          )
+        else
+          Future.value(null),
       ]);
       ecomAdHandlerRaw = EcomAdHandlerRaw(
         input: inputResult,
         buy: remainingResults[0],
         recommendGet: remainingResults[1],
         recommendPost: remainingResults[2],
-        analyze: remainingResults[3],
-        lifebalance: remainingResults[4],
+        analyze: null,
+        lifebalance: null,
       );
     } catch (error) {
       ecomAdHandlerRaw = EcomAdHandlerRaw(error: error.toString());
     }
     _lastEcomSceneObjects = sceneObjectNames;
     _lastEcomGazeTarget = groundedTarget;
-    _lastEcomRelevance = relevanceScore;
+    _lastEcomRelevance = scoreForAh;
   }
 
   // TODO: route safety-memory hazard utterances to IE once the mechanism is confirmed.
@@ -278,15 +271,4 @@ Future<PipelineResult> runPipeline(
     ecomSkipped: ecomSkipped,
     safetySkipped: !shouldRunSafety,
   );
-}
-
-GazeCoordinates? _coordinatesFromXY(double? x, double? y) =>
-    (x != null && y != null) ? GazeCoordinates(x: x, y: y) : null;
-
-GazeCoordinates? _coordinatesFromMap(Map<String, dynamic>? value) {
-  if (value == null) return null;
-  final x = value['x'];
-  final y = value['y'];
-  if (x is! num || y is! num) return null;
-  return GazeCoordinates(x: x.toDouble(), y: y.toDouble());
 }

@@ -1,13 +1,29 @@
+// ignore_for_file: avoid_print
+
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:postgres/postgres.dart';
+import 'package:smartpoc/env_config.dart';
 
 void main() async {
+  await dotenv.load(fileName: '.env');
+  final host = EnvConfig.dbHost;
+  final port = EnvConfig.dbPort;
+  final database = EnvConfig.dbName;
+  final username = EnvConfig.dbUsername;
+  final password = EnvConfig.dbPassword;
+
+  if (host.isEmpty || password.isEmpty) {
+    print('Error: DB credentials missing in .env file.');
+    return;
+  }
+
   final conn = await Connection.open(
     Endpoint(
-      host: 'glassdata-postgres.c5e2qgumyvsg.ap-south-1.rds.amazonaws.com',
-      port: 5432,
-      database: 'glassdatadb',
-      username: 'glassdata_admin',
-      password: 'glassdatadb1234',
+      host: host,
+      port: port,
+      database: database,
+      username: username,
+      password: password,
     ),
     settings: const ConnectionSettings(sslMode: SslMode.require),
   );

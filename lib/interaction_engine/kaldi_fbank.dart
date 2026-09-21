@@ -46,11 +46,15 @@ class KaldiFbank {
   static List<double> _powerSpectrum(List<double> realInput) {
     int n = realInput.length;
     int nFft = 1;
-    while (nFft < n) nFft *= 2;
+    while (nFft < n) {
+      nFft *= 2;
+    }
 
     List<double> real = List.filled(nFft, 0.0);
     List<double> imag = List.filled(nFft, 0.0);
-    for (int i = 0; i < n; i++) real[i] = realInput[i];
+    for (int i = 0; i < n; i++) {
+      real[i] = realInput[i];
+    }
 
     // Bit reversal
     int j = 0;
@@ -117,7 +121,9 @@ class KaldiFbank {
 
     final int nFrames = 1 + (trimmed.length - frameLen) ~/ hopLen;
     int nFft = 1;
-    while (nFft < frameLen) nFft *= 2;
+    while (nFft < frameLen) {
+      nFft *= 2;
+    }
     
     final fbank = _kaldiMelFilterbank(nMels, nFft, sampleRate);
     final List<List<double>> feats = [];
@@ -136,9 +142,13 @@ class KaldiFbank {
 
       // Remove DC
       double mean = 0.0;
-      for (int j = 0; j < frameLen; j++) mean += frame[j];
+      for (int j = 0; j < frameLen; j++) {
+        mean += frame[j];
+      }
       mean /= frameLen;
-      for (int j = 0; j < frameLen; j++) frame[j] -= mean;
+      for (int j = 0; j < frameLen; j++) {
+        frame[j] -= mean;
+      }
 
       // Preemphasis (replicate pad on left)
       List<double> preemph = List.filled(frameLen, 0.0);

@@ -24,7 +24,12 @@ class ContextEngineClient {
   ContextEngineClient({String? contextEngineUrl})
     : contextEngineUrl = contextEngineUrl ?? EnvConfig.contextEngineUrl;
 
+  bool get isConnected => _channel != null;
+
   Future<void> connect() async {
+    if (_channel != null) {
+      await disconnect();
+    }
     AppLogger.log('CONNECT', contextEngineUrl);
     final channel = WebSocketChannel.connect(Uri.parse(contextEngineUrl));
     await channel.ready;
@@ -37,6 +42,8 @@ class ContextEngineClient {
           final jsonOutput = jsonDecode(message) as Map<String, dynamic>;
           lastJsonOutput = jsonOutput;
           AppLogger.log('RESPONSE_JSON', message);
+          // Print directly to terminal for live terminal inspection
+          debugPrint('>>> [CE_OUTPUT] $message');
           onJsonOutput?.call(jsonOutput);
         } else {
           final imageBytes = message as Uint8List;
@@ -47,7 +54,12 @@ class ContextEngineClient {
       },
       onError: (Object error) {
         AppLogger.log('ERROR', '$error');
+        debugPrint('>>> [CE_ERROR] $error');
         onError?.call(error);
+      },
+      onDone: () {
+        AppLogger.log('DISCONNECTED', contextEngineUrl);
+        _channel = null;
       },
     );
   }
@@ -64,7 +76,9 @@ class ContextEngineClient {
 
   Future<void> disconnect() async {
     AppLogger.log('DISCONNECT', contextEngineUrl);
-    await _channel?.sink.close();
+    try {
+      await _channel?.sink.close();
+    } catch (_) {}
     _channel = null;
   }
 }

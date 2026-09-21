@@ -116,7 +116,8 @@ class VideoUploadSourceAdapter implements SourceAdapter {
     final uploaded = _uploadedBytes;
 
     if (uploaded != null && _isImage) {
-      _videoController.add(VideoFrame(bytes: uploaded));
+      final resized = _resizeImageTo640x480(uploaded);
+      _videoController.add(VideoFrame(bytes: resized));
       return;
     }
     if (uploaded != null && !_isImage) {
@@ -127,6 +128,18 @@ class VideoUploadSourceAdapter implements SourceAdapter {
       }
     }
     _videoController.add(VideoFrame(bytes: _placeholderJpeg(), width: 128, height: 128));
+  }
+
+  static Uint8List _resizeImageTo640x480(Uint8List bytes) {
+    try {
+      final decoded = img.decodeImage(bytes);
+      if (decoded == null) return bytes;
+      if (decoded.width <= 640 && decoded.height <= 480) return bytes;
+      final resized = img.copyResize(decoded, width: 640, height: 480);
+      return Uint8List.fromList(img.encodeJpg(resized, quality: 80));
+    } catch (_) {
+      return bytes;
+    }
   }
 
   Uint8List _placeholderJpeg() {

@@ -1,10 +1,14 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'app_theme.dart';
 import 'auth/auth_provider.dart';
+import 'features/schedule/widgets/feature_attribution_insights_card.dart';
 import 'saved_items_service.dart';
+import 'session/session_provider.dart';
 
 class ProductDetailScreen extends StatefulWidget {
   final Map<String, String> item;
@@ -61,9 +65,9 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
     final item = widget.item;
     final hasUrl = item['url'] != null;
     return Scaffold(
-      appBar: AppBar(title: const Text('Product')),
-      body: Padding(
-        padding: const EdgeInsets.all(20),
+      appBar: AppBar(title: const Text('Product Details')),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(20, 16, 20, 32),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -81,7 +85,7 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
                     : Container(color: AppColors.accentTint),
               ),
             ),
-            const SizedBox(height: 20),
+            const SizedBox(height: 18),
             Text(item['name'] ?? '', style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 20)),
             if (item['price'] != null) ...[
               const SizedBox(height: 4),
@@ -107,6 +111,25 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
                 ),
               ),
             ],
+            const SizedBox(height: 16),
+            // Why Myna Recommended This (Frozen Commerce Eligibility & Attribution Breakdown)
+            Consumer<SessionProvider>(
+              builder: (context, session, _) {
+                Map<String, dynamic>? frozenBeOutput;
+                final jsonStr = item['be_output_json'];
+                if (jsonStr != null && jsonStr.isNotEmpty) {
+                  try {
+                    frozenBeOutput = jsonDecode(jsonStr) as Map<String, dynamic>?;
+                  } catch (_) {}
+                }
+                final beOutput = frozenBeOutput ?? session.lastPipelineResult?.behaviourEngineRaw;
+                return FeatureAttributionInsightsCard.fromProduct(
+                  item,
+                  beOutput: beOutput,
+                  sceneContext: item['vlm_description'] ?? session.lastSessionSummary?.vlmDescription,
+                );
+              },
+            ),
             const SizedBox(height: 20),
             OutlinedButton(
               onPressed: _isBusy ? null : _toggleSave,

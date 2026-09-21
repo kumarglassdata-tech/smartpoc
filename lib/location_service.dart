@@ -13,6 +13,7 @@ class LocationService extends ChangeNotifier {
   double? _longitude;
   String? _city;
   String? _country;
+  String? _currentPlaceName;
   StreamSubscription<Position>? _positionSubscription;
 
   bool get isRunning => _isRunning;
@@ -20,6 +21,24 @@ class LocationService extends ChangeNotifier {
   double? get longitude => _longitude;
   String? get city => _city;
   String? get country => _country;
+  String? get currentPlaceName => _currentPlaceName;
+
+  void setManualLocation({
+    required double latitude,
+    required double longitude,
+    String? placeName,
+    String? city,
+    String? country,
+  }) {
+    _latitude = latitude;
+    _longitude = longitude;
+    if (placeName != null && placeName.isNotEmpty) {
+      _currentPlaceName = placeName.toUpperCase();
+    }
+    _city = city ?? placeName ?? '${latitude.toStringAsFixed(4)}, ${longitude.toStringAsFixed(4)}';
+    if (country != null) _country = country;
+    notifyListeners();
+  }
 
   Future<void> start() async {
     if (_isRunning) return;
@@ -56,7 +75,9 @@ class LocationService extends ChangeNotifier {
 
     final locationSettings = kIsWeb
         ? const LocationSettings(accuracy: LocationAccuracy.high, distanceFilter: 5)
-        : AndroidSettings(accuracy: LocationAccuracy.high, distanceFilter: 5, intervalDuration: const Duration(seconds: 5));
+        : defaultTargetPlatform == TargetPlatform.android
+            ? AndroidSettings(accuracy: LocationAccuracy.high, distanceFilter: 5, intervalDuration: const Duration(seconds: 5))
+            : const LocationSettings(accuracy: LocationAccuracy.high, distanceFilter: 5);
 
     _positionSubscription = Geolocator.getPositionStream(locationSettings: locationSettings).listen((position) async {
       _latitude = position.latitude;

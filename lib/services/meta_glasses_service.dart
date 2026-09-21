@@ -27,6 +27,7 @@ class MetaGlassesService {
   final ValueNotifier<String?> statusMessageNotifier = ValueNotifier<String?>(null);
   final ValueNotifier<List<String>> discoveredDevicesNotifier = ValueNotifier<List<String>>(<String>[]);
   final ValueNotifier<String?> connectedDeviceNameNotifier = ValueNotifier<String?>(null);
+  final ValueNotifier<int?> batteryLevelNotifier = ValueNotifier<int?>(null);
   final ValueNotifier<Uint8List?> currentFrameNotifier = ValueNotifier<Uint8List?>(null);
 
   final StreamController<Uint8List> _frameStreamController = StreamController<Uint8List>.broadcast();
@@ -73,11 +74,22 @@ class MetaGlassesService {
               final linkState = event['linkState']?.toString();
               final deviceName = event['name']?.toString() ?? 'Ray-Ban Meta';
               connectedDeviceNameNotifier.value = deviceName;
+              final battery = event['battery'] as int?;
+              if (battery != null && battery >= 0) {
+                batteryLevelNotifier.value = battery;
+              }
               if (linkState == 'CONNECTED') {
                 if (statusNotifier.value != MetaGlassesStatus.streaming) {
                   statusNotifier.value = MetaGlassesStatus.connected;
                 }
                 statusMessageNotifier.value = '$deviceName Ready';
+              }
+              break;
+
+            case 'battery_level':
+              final battery = event['battery'] as int?;
+              if (battery != null && battery >= 0) {
+                batteryLevelNotifier.value = battery;
               }
               break;
 
@@ -100,6 +112,11 @@ class MetaGlassesService {
                 statusNotifier.value = MetaGlassesStatus.error;
                 statusMessageNotifier.value = 'Camera permission denied on Meta View';
               }
+              break;
+
+            case 'audio_permission':
+              final granted = event['granted'] == true;
+              debugPrint('[MetaGlassesService] Audio permission: $granted');
               break;
 
             case 'error':
@@ -190,6 +207,19 @@ class MetaGlassesService {
     } catch (e) {
       debugPrint('[MetaGlassesService] getDiscoveredDevices error: $e');
       return <String>[];
+    }
+  }
+
+  Future<int?> getBatteryLevel() async {
+    try {
+      final res = await _methodChannel.invokeMethod<int>('getBatteryLevel');
+      if (res != null && res >= 0) {
+        batteryLevelNotifier.value = res;
+      }
+      return res;
+    } catch (e) {
+      debugPrint('[MetaGlassesService] getBatteryLevel error: $e');
+      return null;
     }
   }
 

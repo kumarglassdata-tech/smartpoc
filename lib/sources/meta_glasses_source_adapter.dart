@@ -74,14 +74,21 @@ class MetaGlassesSourceAdapter implements SourceAdapter {
   @override
   bool get isActive => _active;
 
+  int _skippedFrames = 0;
+
   @override
   Future<void> start() async {
     if (_active) return;
     _active = true;
+    _skippedFrames = 0;
 
     _frameSub?.cancel();
     _frameSub = glassesService.frameStream.listen((bytes) {
       if (!_active) return;
+      if (_skippedFrames < 2) {
+        _skippedFrames++;
+        return;
+      }
       _videoController.add(VideoFrame(bytes: bytes));
     });
 

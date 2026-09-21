@@ -13,23 +13,21 @@ class ContextEngineInput {
   final double temperatureC;
   final String facingMode;
   final dynamic userId;
+  final String? sessionId;
 
   const ContextEngineInput({
     required this.gpsCoordinates,
     required this.temperatureC,
     this.facingMode = 'environment',
     this.userId,
+    this.sessionId,
   });
 
-  // Without this, CE has no real identity to attribute a frame to and
-  // stamps every response with a generic user_id (confirmed: every BE/AH
-  // call downstream echoed back user_id 0 regardless of who was logged in) -
-  // the real accumulated behaviour graph was building up under that generic
-  // id instead of the authenticated account's.
   Map<String, dynamic> toJson() => {
     'gps_coordinates': gpsCoordinates.toJson(),
     'temperature_c': temperatureC,
     'facing_mode': facingMode,
     if (userId != null) 'user_id': userId,
+    if (sessionId != null && sessionId!.isNotEmpty) 'session_id': sessionId,
   };
 }

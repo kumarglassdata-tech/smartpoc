@@ -15,34 +15,68 @@ class EcomAdHandlerClient {
   final String ecomHubBaseUrl;
   final String ecomHubBuyUrl;
   final String ecomHubRecommendUrl;
-  final String ecomHubLifebalanceUrl;
-  final String ecomHubAnalyzeUrl;
-  // Stricter than the other engines' default (4 failures / 30s) - one
-  // pipeline tick fans out to 5 HTTP calls here, so failures accumulate faster.
+  final String ecomHubRecommendationsUrl;
+  // Circuit breaker protecting AH network calls
   final circuitBreaker = CircuitBreaker(name: 'ecom_ad_handler', failureThreshold: 4, recoveryTimeout: const Duration(seconds: 30));
 
   EcomAdHandlerClient({
     String? ecomHubBaseUrl,
     String? ecomHubBuyUrl,
     String? ecomHubRecommendUrl,
+    String? ecomHubRecommendationsUrl,
     String? ecomHubLifebalanceUrl,
     String? ecomHubAnalyzeUrl,
-  }) : ecomHubBaseUrl = ecomHubBaseUrl ?? EnvConfig.ecomHubBaseUrl,
-       ecomHubBuyUrl = ecomHubBuyUrl ?? EnvConfig.ecomHubBuyUrl,
-       ecomHubRecommendUrl = ecomHubRecommendUrl ?? EnvConfig.ecomHubRecommendUrl,
-       ecomHubLifebalanceUrl = ecomHubLifebalanceUrl ?? EnvConfig.ecomHubLifebalanceUrl,
-       ecomHubAnalyzeUrl = ecomHubAnalyzeUrl ?? EnvConfig.ecomHubAnalyzeUrl;
+  }) : ecomHubBaseUrl = ecomHubBaseUrl ?? (EnvConfig.ecomHubBaseUrl.isNotEmpty ? EnvConfig.ecomHubBaseUrl : 'https://myna.glassdata.ai/api/v1/ah/inp'),
+       ecomHubBuyUrl = ecomHubBuyUrl ?? (EnvConfig.ecomHubBuyUrl.isNotEmpty ? EnvConfig.ecomHubBuyUrl : 'https://myna.glassdata.ai/api/v1/ah/buy'),
+       ecomHubRecommendUrl = ecomHubRecommendUrl ?? (EnvConfig.ecomHubRecommendUrl.isNotEmpty ? EnvConfig.ecomHubRecommendUrl : 'https://myna.glassdata.ai/api/v1/ah/recommend'),
+       ecomHubRecommendationsUrl = ecomHubRecommendationsUrl ?? (EnvConfig.ecomHubRecommendationsUrl.isNotEmpty ? EnvConfig.ecomHubRecommendationsUrl : 'https://myna.glassdata.ai/api/v1/ah/recommendations');
 
-  Future<dynamic> postInput(EcomHubInput input) => _post(ecomHubBaseUrl, input);
-  Future<dynamic> postRecommend(EcomHubInput input) => _post(ecomHubRecommendUrl, input);
-  // /buy needs the same body /inp gets - a bodyless GET here came back with
-  // empty organic_feed/sponsored_feed even right after a matching /inp call;
-  // sending the same EcomHubInput JSON on the GET is what a manual Postman
-  // test confirmed actually returns matched product links.
-  Future<dynamic> getBuy(EcomHubInput input) => _getWithBody(ecomHubBuyUrl, input);
-  Future<dynamic> getRecommend() => _get(ecomHubRecommendUrl);
-  Future<dynamic> getAnalyze() => _get(ecomHubAnalyzeUrl);
-  Future<dynamic> getLifebalance() => _get(ecomHubLifebalanceUrl);
+  /// Ingests multimodal/behavioral telemetry context to prime the middleware.
+  Future<dynamic> postInput(EcomHubInput input) => _postJson(ecomHubBaseUrl, input.toJson());
+
+  /// Instant live product recommendations with link, image, price, rating and delivery.
+  Future<dynamic> getInstantRecommendations({
+    required String product,
+    double relevanceScore = 0.95,
+    String? userId,
+    int limit = 6,
+    String locationType = 'Urban',
+  }) {
+    final body = {
+      'product': product,
+      'relevance_score': relevanceScore,
+      'user_id': userId ?? 'u_live',
+      'limit': limit,
+      'location_type': locationType,
+    };
+    return _postJson(ecomHubRecommendationsUrl, body);
+  }
+
+  /// Polls organic feed for the visual gaze / detected target.
+  Future<dynamic> getBuy({String? userId, String? className, EcomHubInput? legacyInput}) {
+    final targetClass = className ?? (legacyInput?.topSalientObjects.isNotEmpty == true ? legacyInput!.topSalientObjects.first.className : null);
+    final targetUser = userId ?? legacyInput?.userId?.toString() ?? 'u_live';
+    final queryParams = <String, String>{
+      'user_id': targetUser,
+      if (targetClass != null && targetClass.isNotEmpty) 'class_name': targetClass,
+    };
+    final uri = Uri.parse(ecomHubBuyUrl).replace(queryParameters: queryParams);
+    return _get(uri.toString());
+  }
+
+  /// Polls sponsored feed for the user.
+  Future<dynamic> getRecommend({String? userId}) {
+    final queryParams = <String, String>{
+      'user_id': userId ?? 'u_live',
+    };
+    final uri = Uri.parse(ecomHubRecommendUrl).replace(queryParameters: queryParams);
+    return _get(uri.toString());
+  }
+
+  // Deprecated/no-op fallbacks to preserve backward compatibility if called
+  Future<dynamic> getAnalyze() async => null;
+  Future<dynamic> getLifebalance() async => null;
+  Future<dynamic> postRecommend(EcomHubInput input) async => null;
 
   Future<dynamic> _get(String url) {
     return circuitBreaker.execute(() async {
@@ -54,25 +88,10 @@ class EcomAdHandlerClient {
     });
   }
 
-  Future<dynamic> _getWithBody(String url, EcomHubInput input) {
+  Future<dynamic> _postJson(String url, Map<String, dynamic> body) {
     return circuitBreaker.execute(() async {
       final uri = Uri.parse(url);
-      final encodedBody = jsonEncode(input.toJson());
-      AppLogger.log('AH_REQUEST', 'GET $uri $encodedBody');
-      final request = http.Request('GET', uri)
-        ..headers['Content-Type'] = 'application/json'
-        ..body = encodedBody;
-      final streamedResponse = await request.send();
-      final response = await http.Response.fromStream(streamedResponse);
-      AppLogger.log('AH_RESPONSE', '${response.statusCode} ${response.body}');
-      return _decode(response);
-    });
-  }
-
-  Future<dynamic> _post(String url, EcomHubInput input) {
-    return circuitBreaker.execute(() async {
-      final uri = Uri.parse(url);
-      final encodedBody = jsonEncode(input.toJson());
+      final encodedBody = jsonEncode(body);
       AppLogger.log('AH_REQUEST', 'POST $uri $encodedBody');
       final response = await http.post(
         uri,

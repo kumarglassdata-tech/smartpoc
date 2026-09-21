@@ -1,6 +1,7 @@
 # Miscellaneous
 *.class
 *.log
+/logs/
 *.pyc
 *.swp
 .DS_Store
@@ -66,3 +67,18 @@ app.*.map.json
 .env
 .env.*
 !.env.example
+
+# Screenshots & Testing Artifacts
+screenshots/
+/screenshots/
+**/screenshots/
+test_results/
+/test_results/
+test_output/
+/test_output/
+**/failures/
+*.screenshot
+*_screen.png
+*_error_screen.png
+*.test.log
+**/test/

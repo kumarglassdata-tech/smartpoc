@@ -22,7 +22,7 @@ class HomeShell extends StatefulWidget {
   State<HomeShell> createState() => _HomeShellState();
 }
 
-class _HomeShellState extends State<HomeShell> {
+class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
   int _index = 0;
   bool _wakeWordActive = false;
   Timer? _wakeWordHideTimer;
@@ -33,12 +33,26 @@ class _HomeShellState extends State<HomeShell> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _ie = context.read<SessionProvider>().interactionEngineClient;
     _previousWakeWordCallback = _ie.onWakeWordDetected;
     _ie.onWakeWordDetected = _onWakeWordDetected;
     _previousToastCallback = _ie.onToast;
     _ie.onToast = _onToast;
     unawaited(context.read<AuthProvider>().refreshRoles());
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive || state == AppLifecycleState.hidden) {
+      if (mounted) {
+        final session = context.read<SessionProvider>();
+        unawaited(session.interactionEngineClient.stopAudioPlayback());
+        if (session.isRuntimeActive) {
+          unawaited(session.stopRuntime());
+        }
+      }
+    }
   }
 
   void _onWakeWordDetected(double score) {
@@ -69,6 +83,7 @@ class _HomeShellState extends State<HomeShell> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _wakeWordHideTimer?.cancel();
     if (identical(_ie.onWakeWordDetected, _onWakeWordDetected)) {
       _ie.onWakeWordDetected = _previousWakeWordCallback;
@@ -91,11 +106,10 @@ class _HomeShellState extends State<HomeShell> {
       body: Stack(
         children: [
           IndexedStack(index: _index, children: screens),
-          // Persistent always-listening indicator - visible on every tab,
-          // swaying whenever the interaction engine is connected.
+          // Persistent always-listening indicator - positioned to the right
           Positioned(
-            bottom: 20,
-            right: 16,
+            bottom: 24,
+            right: 20,
             child: _MynaBotButton(
               isConnected: ie.isConnected,
               isPlaying: ie.isPlaying,

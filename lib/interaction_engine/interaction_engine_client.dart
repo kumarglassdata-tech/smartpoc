@@ -10,6 +10,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_pcm_sound/flutter_pcm_sound.dart';
 import 'package:flutter_silero_vad/flutter_silero_vad.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:record/record.dart';
 import 'package:web_socket_channel/io.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
@@ -26,7 +27,7 @@ import 'web_pcm_player_stub.dart' if (dart.library.html) 'web_pcm_player_web.dar
 // Silence gap before an utterance is considered finished - short rather than
 // 0ms so a brief inter-word pause doesn't cut the user off mid-sentence, but
 // still reads as "immediate" end_of_speech.
-const _silenceTimeout = Duration(milliseconds: 500);
+const _silenceTimeout = Duration(milliseconds: 700);
 // Grace period for the first silence check right after a wake-word trigger -
 // deliberately much longer than _silenceTimeout: people pause to gather
 // their query right after saying the wake phrase, and 500ms here was
@@ -97,6 +98,7 @@ class InteractionEngineClient {
   // utterance) - fed while the assistant is talking, purely to detect barge-in.
   final List<int> _bargeInAccumulator = [];
   DateTime? _lastBargeInAttemptAt;
+  int _bargeInConsecutiveFrames = 0;
 
   String? _lastSentGazeTarget;
   VoiceNlu? _activeVoiceNlu;
@@ -153,11 +155,10 @@ class InteractionEngineClient {
       final modelPath = '${dir.path}/silero_vad.onnx';
       final data = await rootBundle.load('assets/models/silero_vad.onnx');
       await File(modelPath).writeAsBytes(data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes));
-      // 0.5, not the library default 0.3 - quiet Android mics peak well under
-      // what 0.3 reliably classifies as active.
-      await vad.initialize(modelPath: modelPath, sampleRate: 16000, frameSize: 32, threshold: 0.5, minSilenceDurationMs: 0, speechPadMs: 0);
+      // Set to 0.10 as requested
+      await vad.initialize(modelPath: modelPath, sampleRate: 16000, frameSize: 32, threshold: 0.10, minSilenceDurationMs: 0, speechPadMs: 0);
       _vad = vad;
-      AppLogger.log('IE_INIT', 'Silero VAD ready');
+      AppLogger.log('IE_INIT', 'Silero VAD ready (threshold: 0.10)');
     } catch (error) {
       AppLogger.log('IE_INIT_ERROR', 'VAD init failed: $error');
     }
@@ -191,6 +192,11 @@ class InteractionEngineClient {
   // --- Connection ------------------------------------------------------------
 
   Future<void> connect({required String sessionId, dynamic userId}) async {
+    if (_sessionId == sessionId && _channel != null) {
+      AppLogger.log('IE_CONNECT', 'Already connected to session $sessionId');
+      return;
+    }
+    await disconnect();
     _sessionId = sessionId;
     _userId = userId;
     _intentionalDisconnect = false;
@@ -214,7 +220,12 @@ class InteractionEngineClient {
     _heartbeatTimer = Timer.periodic(const Duration(seconds: 15), (_) => _send(jsonEncode({'type': 'ping'})));
 
     try {
-      _channel?.sink.close();
+      if (_channel != null) {
+        try {
+          await _channel?.sink.close();
+        } catch (_) {}
+        _channel = null;
+      }
       final WebSocketChannel channel;
       if (kIsWeb) {
         // Browsers can't set WS handshake headers - server falls back to
@@ -312,20 +323,43 @@ class InteractionEngineClient {
     _voiceNluTimer = Timer(_voiceNluTtl, () => _activeVoiceNlu = null);
   }
 
+  Future<bool> requestMicrophonePermission() async {
+    try {
+      if (!kIsWeb) {
+        final status = await Permission.microphone.request();
+        if (status.isGranted) return true;
+      }
+      return await _audioRecorder.hasPermission();
+    } catch (e) {
+      debugPrint('[IE] Microphone permission request error: $e');
+      return false;
+    }
+  }
+
   // --- Wake word + VAD -> mic streaming ---------------------------------
 
   Future<void> startVad() async {
     if (_vadActive) return;
-    bool hasPermission;
+    bool hasPermission = false;
     try {
-      hasPermission = await _audioRecorder.hasPermission();
+      if (!kIsWeb) {
+        final status = await Permission.microphone.request();
+        hasPermission = status.isGranted;
+      } else {
+        hasPermission = await _audioRecorder.hasPermission();
+      }
     } catch (error) {
       hasPermission = false;
       AppLogger.log('IE_ERROR', 'Mic permission check failed: $error');
     }
     if (!hasPermission) {
+      try {
+        hasPermission = await _audioRecorder.hasPermission();
+      } catch (_) {}
+    }
+    if (!hasPermission) {
       AppLogger.log('IE_ERROR', 'Mic permission denied');
-      onToast?.call('Microphone access is blocked - allow it in your browser/app settings to use voice.', 'error');
+      onToast?.call('Microphone access is blocked - allow it in your app settings to use voice.', 'error');
       return;
     }
     _vadActive = true;
@@ -432,9 +466,9 @@ class InteractionEngineClient {
     }
 
     if (_isVerifyingSpeaker) {
-      // Accumulate samples until we have a complete utterance segment (~1.25s = 20000 samples)
+      // Accumulate samples until we have an embedding segment (~600ms = 9600 samples)
       _verificationBuffer.addAll(samples);
-      if (_verificationBuffer.length >= 20000) {
+      if (_verificationBuffer.length >= 9600) {
         _runSpeakerVerification();
       }
     } else if (_isSpeaking) {
@@ -483,12 +517,11 @@ class InteractionEngineClient {
         if (!_wakeWordEnabled && _speakerProfile != null && _speakerProfile!.isEnrolled) {
           _isVerifyingSpeaker = true;
           _verificationBuffer.clear();
-          // Initialize verification buffer with recent audio samples (up to ~300ms onset)
           final onsetCount = min(_preBufferSamples.length, 4800);
           if (onsetCount > 0) {
             _verificationBuffer.addAll(_preBufferSamples.sublist(_preBufferSamples.length - onsetCount));
           }
-          AppLogger.log('IE_VAD', 'Voice activity detected, verifying speaker profile for ${_speakerProfile!.userId} (onset: $onsetCount samples)...');
+          AppLogger.log('IE_VAD', 'Voice activity detected, verifying speaker profile for ${_speakerProfile!.userId}...');
         } else {
           _beginForwardedUtterance(fromWakeWord: false, confidence: (maxAmplitude * 2.5).clamp(0.5, 1.0));
         }
@@ -559,45 +592,45 @@ class InteractionEngineClient {
   Future<void> _checkBargeIn(Int16List frame) async {
     final vad = _vad;
     final now = DateTime.now();
-    if (_lastBargeInAttemptAt != null && now.difference(_lastBargeInAttemptAt!) < const Duration(seconds: 2)) return;
+    if (_lastBargeInAttemptAt != null && now.difference(_lastBargeInAttemptAt!) < const Duration(milliseconds: 800)) return;
 
-    // On web there is no Silero VAD - use amplitude as a barge-in signal.
-    if (vad == null) {
-      if (kIsWeb) {
-        var maxAmplitude = 0.0;
-        for (final s in frame) {
-          final v = s / 32768.0;
-          if (v.abs() > maxAmplitude) maxAmplitude = v.abs();
-        }
-        if (maxAmplitude > 0.15) {
-          _lastBargeInAttemptAt = now;
-          AppLogger.log('IE_VAD', 'Barge-in (amplitude) detected on web');
-          triggerBargeIn();
-        }
+    var maxAmplitude = 0.0;
+    for (final s in frame) {
+      final v = s / 32768.0;
+      if (v.abs() > maxAmplitude) maxAmplitude = v.abs();
+    }
+
+    bool isActive = false;
+    if (vad != null) {
+      final float32 = Float32List(frame.length);
+      for (var i = 0; i < frame.length; i++) {
+        float32[i] = frame[i] / 32768.0;
       }
-      return;
+      try {
+        isActive = (await vad.predict(float32)) ?? false;
+      } catch (error) {
+        AppLogger.log('IE_ERROR', 'Barge-in VAD predict failed: $error');
+      }
     }
 
-    if (_lastBargeInAttemptAt != null && now.difference(_lastBargeInAttemptAt!) < const Duration(seconds: 2)) return;
-    final float32 = Float32List(frame.length);
-    for (var i = 0; i < frame.length; i++) {
-      float32[i] = frame[i] / 32768.0;
-    }
-    bool isActive;
-    try {
-      isActive = (await vad.predict(float32)) ?? false;
-    } catch (error) {
-      AppLogger.log('IE_ERROR', 'Barge-in VAD predict failed: $error');
-      return;
-    }
-    // No amplitude fallback here (unlike normal speech detection) - the
-    // assistant's own TTS is loud through the speaker, so an amplitude
-    // threshold would false-trigger on it constantly. The neural VAD alone
-    // is the safer (if imperfect) signal for this.
-    if (isActive) {
-      _lastBargeInAttemptAt = now;
-      AppLogger.log('IE_VAD', 'Possible barge-in detected');
-      triggerBargeIn();
+    // For barge-in / interruption, require clear intentional speech energy so
+    // background noise, small room clicks, and speaker playback bleed do not cut the assistant off.
+    final double vadMinAmp = kIsWeb ? 0.35 : 0.20;
+    final double fallbackAmp = kIsWeb ? 0.60 : 0.40;
+
+    final bool isFrameActive = (isActive && maxAmplitude >= vadMinAmp) || (maxAmplitude >= fallbackAmp);
+
+    if (isFrameActive) {
+      _bargeInConsecutiveFrames++;
+      // Require 2 consecutive active 32ms frames (or 1 strong voice peak >= 0.50)
+      if (_bargeInConsecutiveFrames >= 2 || maxAmplitude >= 0.50) {
+        _bargeInConsecutiveFrames = 0;
+        _lastBargeInAttemptAt = now;
+        AppLogger.log('IE_VAD', 'Intentional barge-in detected (vad=$isActive, amp=${maxAmplitude.toStringAsFixed(2)})');
+        triggerBargeIn();
+      }
+    } else {
+      _bargeInConsecutiveFrames = 0;
     }
   }
 
@@ -649,11 +682,15 @@ class InteractionEngineClient {
 
   void triggerBargeIn() {
     if (!_isPlaying) return;
+    AppLogger.log('IE_VAD', 'triggerBargeIn: sending interrupt and flushing audio');
     _send(jsonEncode({
       'type': 'interrupt',
       'confidence': 1.0,
       if (_preBuffer.isNotEmpty) 'audio_prebuffer_b64': base64Encode(_preBuffer),
     }));
+    unawaited(_flushAudio());
+    _conversationActive = true;
+    _beginForwardedUtterance(fromWakeWord: false, confidence: 1.0);
   }
 
   // --- TTS playback --------------------------------------------------------
@@ -743,6 +780,9 @@ class InteractionEngineClient {
     }
   }
 
+  /// Immediately stops assistant audio playback and flushes any buffered PCM chunks.
+  Future<void> stopAudioPlayback() => _flushAudio();
+
   Future<void> _flushAudio() async {
     _audioQueue.clear();
     if (!_isPlaying) {
@@ -801,11 +841,14 @@ class InteractionEngineClient {
   Future<void> disconnect() async {
     _intentionalDisconnect = true;
     _reconnectTimer?.cancel();
+    _reconnectTimer = null;
     _heartbeatTimer?.cancel();
+    _heartbeatTimer = null;
     try {
       await _channel?.sink.close();
     } catch (_) {}
     _channel = null;
+    onStateChanged?.call();
   }
 
   Future<void> dispose() async {

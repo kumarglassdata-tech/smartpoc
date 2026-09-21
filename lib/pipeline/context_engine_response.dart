@@ -46,7 +46,10 @@ class ContextEngineResponse {
   final String? vlmDescription;
   final Map<String, dynamic>? omniContextVlm;
   final Map<String, dynamic>? locationInformation;
+  final String? currentLocation;
   final Map<String, dynamic>? gpsCoordinates;
+  final Map<String, dynamic>? activityInformation;
+  final String? currentActivity;
 
   const ContextEngineResponse({
     required this.sessionId,
@@ -61,7 +64,10 @@ class ContextEngineResponse {
     this.vlmDescription,
     this.omniContextVlm,
     this.locationInformation,
+    this.currentLocation,
     this.gpsCoordinates,
+    this.activityInformation,
+    this.currentActivity,
   });
 
   factory ContextEngineResponse.parse(Map<String, dynamic> ceOutput) {
@@ -74,6 +80,36 @@ class ContextEngineResponse {
     final shelfReach = primitives['shelf_reach'] as Map<String, dynamic>? ?? {};
     final handEventMap = mynaContext['hand_object_events'] as Map<String, dynamic>? ?? {};
     final omniContextVlm = mynaContext['omni_context_vlm'] as Map<String, dynamic>?;
+    final rawActivity = mynaContext['activity_information'] ??
+        ceOutput['activity_information'] ??
+        mynaContext['activity_info'];
+    final activityInfo = rawActivity is Map<String, dynamic>
+        ? rawActivity
+        : (rawActivity is Map ? Map<String, dynamic>.from(rawActivity) : null);
+
+    final parsedActivity = activityInfo?['activity']?.toString() ??
+        activityInfo?['current_activity']?.toString() ??
+        activityInfo?['label']?.toString() ??
+        activityInfo?['activity_type']?.toString() ??
+        (rawActivity is String ? rawActivity : null);
+
+    final rawLoc = mynaContext['location_information'] ??
+        ceOutput['location_information'] ??
+        mynaContext['location_info'] ??
+        ceOutput['location_info'];
+    final locInfo = rawLoc is Map<String, dynamic>
+        ? rawLoc
+        : (rawLoc is Map ? Map<String, dynamic>.from(rawLoc) : null);
+
+    final parsedLocation = locInfo?['current_location']?.toString() ??
+        locInfo?['location']?.toString() ??
+        locInfo?['place']?.toString() ??
+        locInfo?['place_name']?.toString() ??
+        locInfo?['venue']?.toString() ??
+        locInfo?['environment']?.toString() ??
+        locInfo?['context']?.toString() ??
+        locInfo?['category']?.toString() ??
+        (rawLoc is String ? rawLoc : null);
 
     return ContextEngineResponse(
       sessionId: telemetry['session_id'] as String? ?? 'default_session',
@@ -109,8 +145,11 @@ class ContextEngineResponse {
       ),
       vlmDescription: omniContextVlm?['detailed_description'] as String?,
       omniContextVlm: omniContextVlm,
-      locationInformation: mynaContext['location_information'] as Map<String, dynamic>?,
+      locationInformation: locInfo,
+      currentLocation: _nullIfEmpty(parsedLocation),
       gpsCoordinates: telemetry['gps_coordinates'] as Map<String, dynamic>?,
+      activityInformation: activityInfo,
+      currentActivity: _nullIfEmpty(parsedActivity),
     );
   }
 }

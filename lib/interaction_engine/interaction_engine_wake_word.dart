@@ -81,7 +81,8 @@ class WakeWordDetector {
       audio[i] = _window[i] / 32768.0;
     }
 
-    final melInput = await OrtValue.fromList(audio, [1, _windowSamples]);
+    final audioList = Float32List.fromList(audio);
+    final melInput = await OrtValue.fromList(audioList, [1, _windowSamples]);
     Float32List melFlat;
     try {
       final melOutputs = await melSession.run({melSession.inputNames.first: melInput});
@@ -104,13 +105,12 @@ class WakeWordDetector {
 
     final embeddings = <Float32List>[];
     for (int start = 0; start + _embeddingWindow <= timeFrames; start += _embeddingStride) {
-      // Re-checked every iteration, not just once - dispose() can land mid-loop
-      // (this can run a dozen-plus native calls per cycle), and continuing to
-      // call .run() on a session that's being closed is what crashes natively
-      // (JNI abort, uncatchable from Dart) rather than throwing a Dart error.
       if (_disposed) return;
-      final windowView = Float32List.sublistView(melFlat, start * _melBins, (start + _embeddingWindow) * _melBins);
-      final embInput = await OrtValue.fromList(windowView, [1, _embeddingWindow, _melBins, 1]);
+      // Use contiguous Float32List sublist rather than sublistView to avoid JNI offset corruption
+      final windowData = Float32List.fromList(
+        melFlat.sublist(start * _melBins, (start + _embeddingWindow) * _melBins),
+      );
+      final embInput = await OrtValue.fromList(windowData, [1, _embeddingWindow, _melBins, 1]);
       try {
         final embOutputs = await embeddingSession.run({embeddingSession.inputNames.first: embInput});
         final embOutput = embOutputs[embeddingSession.outputNames.first]!;

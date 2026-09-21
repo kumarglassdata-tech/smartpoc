@@ -91,7 +91,7 @@ ThemeData buildAppTheme({required bool isDark}) {
       style: FilledButton.styleFrom(
         backgroundColor: AppColors.accent,
         foregroundColor: Colors.white,
-        minimumSize: const Size.fromHeight(52),
+        minimumSize: const Size(64, 50),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
       ),
@@ -99,7 +99,7 @@ ThemeData buildAppTheme({required bool isDark}) {
     outlinedButtonTheme: OutlinedButtonThemeData(
       style: OutlinedButton.styleFrom(
         foregroundColor: AppColors.textPrimary,
-        minimumSize: const Size.fromHeight(52),
+        minimumSize: const Size(64, 50),
         side: BorderSide(color: AppColors.border),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       ),

@@ -8,8 +8,8 @@ class SpeakerProfile {
   List<List<double>> embeddings = [];
   int? enrolledAt;
 
-  static const double userSimThreshold = 0.45;
-  static const double otherSimThreshold = 0.35;
+  static const double userSimThreshold = 0.32;
+  static const double otherSimThreshold = 0.25;
   static const double enrollConsistencyMinSimilarity = 0.30;
   static const int maxEnrollSamples = 4;
 

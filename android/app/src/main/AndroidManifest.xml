@@ -15,7 +15,8 @@
     <application
         android:label="smartpoc"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher">
+        android:icon="@mipmap/ic_launcher"
+        android:usesCleartextTraffic="true">
         <!-- Meta DAT Credentials injected from build.gradle -->
         <meta-data
             android:name="com.meta.wearable.mwdat.APPLICATION_ID"
